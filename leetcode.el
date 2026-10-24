@@ -1142,21 +1142,38 @@ Emacs sessions.  Test inputs run remotely with `leetcode-try'."
      (message "LeetCode setup failed: %s" (error-message-string err))
      (signal (car err) (cdr err)))))
 
+(defun leetcode--prepare-result-buffer (problem-id)
+  "Prepare the result buffer for PROBLEM-ID without changing windows."
+  (with-current-buffer (get-buffer-create (leetcode--result-buffer-name problem-id))
+    (erase-buffer)
+    (insert "Waiting for result...")))
+
+(defun leetcode--show-run-result (renderer problem-id result)
+  "Render RESULT for PROBLEM-ID with RENDERER, preserving existing windows.
+Reuse a visible result buffer; otherwise let `display-buffer' open one."
+  (funcall renderer problem-id result)
+  (display-buffer (get-buffer (leetcode--result-buffer-name problem-id))
+                  '((display-buffer-reuse-window display-buffer-in-side-window)
+                    (side . bottom)
+                    (window-height . 0.25)
+                    (inhibit-same-window . t))))
+
 (aio-defun leetcode-try ()
-  "Asynchronously test the code using customized testcase."
+  "Asynchronously test customized inputs without resetting the window layout."
   (interactive)
-  (leetcode-restore-layout)
   (aio-await (leetcode--ensure-login t))
   (let* ((title-slug (leetcode--get-slug-title (current-buffer)))
          (problem (leetcode--get-problem title-slug))
          (problem-id (leetcode-problem-id problem))
+         (_ (leetcode--prepare-result-buffer problem-id))
          (interpret-id (aio-await (leetcode--api-interpret-solution problem))))
-    (aio-await (leetcode--api-check-submission interpret-id problem #'leetcode--show-testcases-result))))
+    (aio-await (leetcode--api-check-submission
+                interpret-id problem
+                (apply-partially #'leetcode--show-run-result #'leetcode--show-testcases-result)))))
 
 (aio-defun leetcode-submit ()
-  "Asynchronously submit the code and show result."
+  "Asynchronously submit code without resetting the window layout."
   (interactive)
-  (leetcode-restore-layout)
   (aio-await (leetcode--ensure-login t))
   (let* ((code-buf (current-buffer))
          (code (leetcode--code-buffer-data))
@@ -1164,6 +1181,7 @@ Emacs sessions.  Test inputs run remotely with `leetcode-try'."
          (problem (leetcode--get-problem slug-title))
          (problem-id (leetcode-problem-id problem))
          (backend-id (leetcode-problem-backend-id problem))
+         (_ (leetcode--prepare-result-buffer problem-id))
          (response (aio-await (leetcode--api-submit backend-id slug-title code)))
          (response-status (car response))
          (response-buffer (cdr response)))
@@ -1171,7 +1189,9 @@ Emacs sessions.  Test inputs run remotely with `leetcode-try'."
         (switch-to-buffer response-buffer)
       (let* ((resp (leetcode--parse-buffer response-buffer))
              (submission-id (number-to-string (alist-get 'submission_id resp))))
-        (aio-await (leetcode--api-check-submission submission-id problem #'leetcode--show-submission-result))))))
+        (aio-await (leetcode--api-check-submission
+                    submission-id problem
+                    (apply-partially #'leetcode--show-run-result #'leetcode--show-submission-result)))))))
 
 (defun leetcode--solving-window-layout ()
   "Specify layout for solving problem.
