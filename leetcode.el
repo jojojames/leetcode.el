@@ -1821,13 +1821,20 @@ It will restore the layout based on current buffer's name."
                       (error-message-string err))))))
 
 (define-minor-mode leetcode-solution-mode
-  "Minor mode to provide shortcut and hooks."
+  "Minor mode to provide solution shortcuts and save hooks.
+Disable automatic saving so only explicit saves trigger tests."
   :require 'leetcode
   :lighter " LC-Solution"
   :group 'leetcode
   :keymap leetcode-solution-mode-map
   (if leetcode-solution-mode
-      (add-hook 'after-save-hook #'leetcode--run-after-save nil t)
+      (progn
+        (setq-local auto-save-visited-mode nil
+                    auto-save-default nil)
+        (auto-save-mode -1)
+        (add-hook 'after-save-hook #'leetcode--run-after-save nil t))
+    (kill-local-variable 'auto-save-visited-mode)
+    (kill-local-variable 'auto-save-default)
     (remove-hook 'after-save-hook #'leetcode--run-after-save t)))
 
 (provide 'leetcode)
