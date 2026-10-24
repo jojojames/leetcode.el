@@ -624,9 +624,26 @@ Paste and submit there so browser extensions can observe the submission."
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; LeetCode API ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+(defun leetcode--json-request-data (object)
+  "Encode OBJECT as ASCII JSON bytes for an HTTP request.
+Escape Unicode so multibyte HTTP headers cannot reinterpret UTF-8 bytes
+when Emacs concatenates the request.  JSON decoding restores the text."
+  (string-to-unibyte
+   (replace-regexp-in-string
+    "[^[:ascii:]]"
+    (lambda (text)
+      (let ((character (aref text 0)))
+        (if (<= character #xffff)
+            (format "\\u%04x" character)
+          (let ((offset (- character #x10000)))
+            (format "\\u%04x\\u%04x"
+                    (+ #xd800 (ash offset -10))
+                    (+ #xdc00 (logand offset #x3ff)))))))
+    (json-encode object) t t)))
+
 (defun leetcode--graphql-payload (operation query &optional vars)
   "Construct GraphQL request payload with OPERATION, QUERY or maybe VARS."
-  (json-encode
+  (leetcode--json-request-data
    (let ((ret `(("operationName" . ,operation)
                 ("query" . ,query))))
      (if vars `(,@ret ("variables" . ,vars)) ret))))
@@ -804,7 +821,7 @@ of QUERY-NAME."
   (let* ((title-slug (leetcode-problem-title-slug problem))
          (problem-id (leetcode-problem-id problem))
          (backend-id (leetcode-problem-backend-id problem))
-         (payload (json-encode `((data_input . ,(leetcode--testcase-buffer-data problem-id))
+         (payload (leetcode--json-request-data `((data_input . ,(leetcode--testcase-buffer-data problem-id))
                                  (lang . ,leetcode--lang)
                                  (question_id . ,backend-id)
                                  (typed_code . ,(leetcode--code-buffer-data)))))
@@ -829,7 +846,7 @@ of QUERY-NAME."
          (url-request-extra-headers `(,@(aio-await (leetcode--common-extra-headers))
                                       ,(leetcode--referer (format leetcode--url-problems-submission slug-title))))
          (url-request-data
-          (json-encode `((lang . ,leetcode--lang)
+          (leetcode--json-request-data `((lang . ,leetcode--lang)
                          (question_id . ,backend-id)
                          (typed_code . ,code)))))
     (aio-await (aio-url-retrieve (format leetcode--url-submit slug-title)))))
@@ -1105,7 +1122,7 @@ row."
          (url-request-extra-headers `(,@(aio-await (leetcode--common-extra-headers))
                                       ,(leetcode--referer leetcode--url-login)))
          (url-request-data
-          (json-encode
+          (leetcode--json-request-data
            `((operationName . "questionOfToday")
              (query . ,leetcode--url-daily-challenge)))))
     (with-current-buffer (url-retrieve-synchronously leetcode--url-graphql)
