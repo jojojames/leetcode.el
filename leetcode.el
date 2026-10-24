@@ -128,6 +128,11 @@ mysql, mssql, oraclesql."
   :group 'leetcode
   :type 'boolean)
 
+(defcustom leetcode-result-timeout 60
+  "Maximum seconds to wait for a LeetCode test or submission result."
+  :group 'leetcode
+  :type 'number)
+
 (defcustom leetcode-focus t
   "When execute `leetcode', always delete other windows."
   :group 'leetcode
@@ -725,29 +730,56 @@ of QUERY-NAME."
     (aio-await (aio-url-retrieve (format leetcode--url-submit slug-title)))))
 
 (aio-defun leetcode--api-check-submission (interpret-id problem on-success)
-  "Polling problem with PROBLEM-ID submission by INTERPRET-ID.
-When check submission success, execute ON-SUCCESS. Both
-`leetcode-try' and `leetcode-submit' rely on this to poll
-submission status."
-  (message "LeetCode check submission: %s" (format leetcode--url-check-submission interpret-id))
-  (let* ((title-slug (leetcode-problem-title-slug problem))
-         (problem-id (leetcode-problem-id problem))
-         (url-request-method "GET")
-         (url-request-extra-headers `(,@(aio-await (leetcode--common-extra-headers))
-                                      ,(leetcode--referer (format leetcode--url-problems title-slug))))
-         (response (aio-await (aio-url-retrieve (format leetcode--url-check-submission interpret-id))))
-         (response-status (car response))
-         (response-buffer (cdr response)))
-    (if-let ((error-info (plist-get response-status :error)))
-        (progn
-          (switch-to-buffer response-buffer)
-          (leetcode--warn "LeetCode check submission ERROR: %S" error-info))
-      (let ((result (leetcode--parse-buffer response-buffer)))
-        (let-alist result
-          (pcase .state
-            ((or "PENDING" "STARTED") ((aio-await (aio-sleep 0.2))
-                                       (aio-await (leetcode--api-check-submission interpret-id problem on-success))))
-            ("SUCCESS" (funcall on-success problem-id result))))))))
+  "Poll INTERPRET-ID for PROBLEM and pass a final result to ON-SUCCESS.
+Stop after `leetcode-result-timeout' seconds and report errors visibly."
+  (condition-case err
+      (progn
+        (unless (and (stringp interpret-id) (not (string-empty-p interpret-id)))
+          (user-error "LeetCode did not return a test or submission ID"))
+        (let* ((title-slug (leetcode-problem-title-slug problem))
+               (problem-id (leetcode-problem-id problem))
+               (url (format leetcode--url-check-submission interpret-id))
+               (deadline (+ (float-time) leetcode-result-timeout))
+               (url-request-method "GET")
+               (url-request-data nil)
+               (url-request-extra-headers
+                `(,@(aio-await (leetcode--common-extra-headers))
+                  ,(leetcode--referer (format leetcode--url-problems title-slug))))
+               (finished nil)
+               (result nil))
+          (while (not finished)
+            (let ((remaining (- deadline (float-time))))
+              (when (<= remaining 0)
+                (user-error "LeetCode result timed out after %s seconds" leetcode-result-timeout))
+              (let* ((request (aio-url-retrieve url))
+                     (timer (run-at-time remaining nil #'aio-cancel request))
+                     (response
+                      (unwind-protect
+                          (condition-case nil
+                              (aio-await request)
+                            (aio-cancel
+                             (user-error "LeetCode result timed out after %s seconds"
+                                         leetcode-result-timeout)))
+                        (cancel-timer timer)))
+                     (buffer (cdr response)))
+                (unwind-protect
+                    (progn
+                      (when (plist-get (car response) :error)
+                        (user-error "LeetCode result request failed: %S"
+                                    (plist-get (car response) :error)))
+                      (setq result (leetcode--parse-buffer buffer)))
+                  (when (buffer-live-p buffer) (kill-buffer buffer)))))
+            (let ((state (alist-get 'state result)))
+              (pcase state
+                ("SUCCESS" (setq finished t))
+                ((or "PENDING" "STARTED" "RUNNING_TESTS" "JUDGING")
+                 (message "LeetCode testing: %s..." state)
+                 (aio-await (aio-sleep 0.5)))
+                (_ (user-error "Unexpected LeetCode result state: %S" state)))))
+          (funcall on-success problem-id result)))
+    (error
+     (message "LeetCode testing failed: %s" (error-message-string err))
+     (signal (car err) (cdr err)))))
 
 
 (aio-defun leetcode--login ()
