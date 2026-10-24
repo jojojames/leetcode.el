@@ -1390,11 +1390,7 @@ STATUS_CODE has following possible value:
        ((eq .status_code 20)
         (insert (format "Status: %s" (leetcode--add-font-lock .status_msg 'leetcode-error-face)))
         (insert "\n\n")
-        (insert (format .full_compile_error))))
-      (display-buffer (current-buffer)
-                      '((display-buffer-reuse-window
-                         leetcode--display-result)
-                        (reusable-frames . visible))))))
+        (insert (format .full_compile_error)))))))
 
 (defun leetcode--show-problem (problem)
   "Show the detail of PROBLEM.
