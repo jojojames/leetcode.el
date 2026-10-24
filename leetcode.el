@@ -120,12 +120,14 @@ mysql, mssql, oraclesql."
   :type 'string)
 
 (defcustom leetcode-directory "~/leetcode"
-  "Directory to save solutions."
+  "Directory containing saved LeetCode solution files.
+Create it, including missing parent directories, when opening a solution."
   :group 'leetcode
-  :type 'string)
+  :type 'directory)
 
-(defcustom leetcode-save-solutions nil
-  "If it's t, save leetcode solutions to `leetcode-directory'."
+(defcustom leetcode-save-solutions t
+  "Whether solution buffers visit files in `leetcode-directory'.
+Save normally with `save-buffer'.  Set to nil to use scratch buffers."
   :group 'leetcode
   :type 'boolean)
 
@@ -1557,11 +1559,9 @@ When PROBLEM is supplied, use its canonical slug and frontend ID."
   "Get code buffer by BUF-NAME."
   (if (not leetcode-save-solutions)
       (get-buffer-create buf-name)
-    (unless (file-directory-p leetcode-directory)
-      (make-directory leetcode-directory))
+    (make-directory (expand-file-name leetcode-directory) t)
     (find-file-noselect
-     (concat (file-name-as-directory leetcode-directory)
-             buf-name))))
+     (expand-file-name buf-name leetcode-directory))))
 
 (defun leetcode--get-problem (slug-title)
   "Get problem from `leetcode--problems' by SLUG-TITLE."
