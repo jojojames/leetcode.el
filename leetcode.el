@@ -595,13 +595,15 @@ LeetCode require slug-title as the request parameters."
     (match-string 1 path)))
 
 (defun leetcode--clipboard-problem-url ()
-  "Return a valid problem URL from the clipboard or kill ring, if any."
-  (let ((candidates (list (ignore-errors (gui-get-selection 'CLIPBOARD 'STRING))
-                          (car kill-ring))))
-    (seq-find (lambda (value)
-                (and (stringp value)
-                     (ignore-errors (leetcode--slug-from-url value))))
-              candidates)))
+  "Return a valid problem URL from the clipboard, if any.
+Use the latest kill only when the clipboard is empty or unavailable."
+  (let* ((clipboard (ignore-errors (gui-get-selection 'CLIPBOARD 'STRING)))
+         (value (if (and (stringp clipboard) (not (string-empty-p clipboard)))
+                    clipboard
+                  (car kill-ring))))
+    (when (and (stringp value)
+               (ignore-errors (leetcode--slug-from-url value)))
+      (string-trim value))))
 
 (defun leetcode-copy-solution ()
   "Copy submission code from the current LeetCode solution buffer."
@@ -1115,12 +1117,13 @@ row."
 ;;;###autoload(autoload 'leetcode-setup-from-url "leetcode" nil t)
 (aio-defun leetcode-setup-from-url (url)
   "Start a fresh attempt at the LeetCode problem at URL.
-Default to a problem URL on the clipboard or kill ring.  Fetch the
+Use a problem URL on the clipboard or kill ring without prompting;
+otherwise prompt for a URL.  Fetch the
 problem directly, without loading the problems list.  Preserve previous
 code in a separate attempt buffer; save that buffer to retain it across
 Emacs sessions.  Test inputs run remotely with `leetcode-try'."
-  (interactive (list (read-string "LeetCode problem URL: "
-                                  (leetcode--clipboard-problem-url))))
+  (interactive (list (or (leetcode--clipboard-problem-url)
+                         (read-string "LeetCode problem URL: "))))
   (condition-case err
       (let* ((slug (leetcode--slug-from-url url))
              (request (leetcode--fetch-workspace-question slug))
