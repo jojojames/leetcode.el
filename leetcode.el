@@ -42,6 +42,7 @@
 (require 'subr-x)
 (require 'mm-url)
 (require 'url-parse)
+(require 'tab-bar)
 (require 'cl-lib)
 
 (require 's)
@@ -151,6 +152,14 @@ Only buffers with `leetcode-solution-mode' enabled are affected."
 
 (defcustom leetcode-focus t
   "When execute `leetcode', always delete other windows."
+  :group 'leetcode
+  :type 'boolean)
+
+(defcustom leetcode-open-problem-in-new-tab t
+  "Whether starting a problem creates a new Emacs tab for its workspace.
+When nil, build the workspace in the current tab as before.
+This applies to URL setup and starting a solution from
+the problems list or description.  Previewing a description stays put."
   :group 'leetcode
   :type 'boolean)
 
@@ -1160,7 +1169,6 @@ Emacs sessions.  Test inputs run remotely with `leetcode-try'."
                               (equal (leetcode-snippet-lang-slug snippet) leetcode--lang))
                             (leetcode-problem-snippets problem))
             (user-error "Problem %s has no %s starter code" slug leetcode--lang)))
-	(leetcode--show-problem problem)
 	(let ((buffer (leetcode--start-coding problem t)))
 	  (pop-to-buffer buffer)
 	  (goto-char (point-min))
@@ -1517,7 +1525,6 @@ Call `leetcode-show-problem-in-browser' on the current problem id."
   (interactive (list (read-number "Solve the problem with id: "
                                   (leetcode--get-current-problem-id))))
   (let* ((problem (leetcode--get-problem-by-id problem-id)))
-    (leetcode--show-problem problem)
     (leetcode--start-coding problem)))
 
 (defun leetcode-solve-current-problem ()
@@ -1630,6 +1637,7 @@ Archives stay in memory until explicitly saved by the user."
 Use a file when `leetcode-save-solutions' is non-nil.  Choose the
 major mode by `leetcode-prefer-language' and `auto-mode-alist'.
 With FRESH, archive existing code before inserting the starter template.
+Open a new tab when `leetcode-open-problem-in-new-tab' is non-nil.
 Return the solution buffer."
   (let* ((title (leetcode-problem-title problem))
          (slug-title (leetcode-problem-title-slug problem))
@@ -1646,6 +1654,12 @@ Return the solution buffer."
     (unless (member title leetcode--problem-titles)
       (push title leetcode--problem-titles))
 
+    ;; Create the tab before rendering a description or changing windows, so
+    ;; the previous tab retains its complete window arrangement.
+    (when leetcode-open-problem-in-new-tab
+      (tab-bar-new-tab)
+      (tab-bar-rename-tab (format "LC %s: %s" problem-id title)))
+    (leetcode--show-problem problem)
     (leetcode--solving-window-layout)
 
     ;; Set current programming language.
