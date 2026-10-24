@@ -41,6 +41,7 @@
 (require 'seq)
 (require 'subr-x)
 (require 'mm-url)
+(require 'url-parse)
 (require 'cl-lib)
 
 (require 's)
@@ -127,6 +128,12 @@ mysql, mssql, oraclesql."
   "If it's t, save leetcode solutions to `leetcode-directory'."
   :group 'leetcode
   :type 'boolean)
+
+(defcustom leetcode-browser-function #'browse-url
+  "Function called with a problem URL by `leetcode-return-to-browser'.
+Choose the browser containing your review extension."
+  :group 'leetcode
+  :type 'function)
 
 (defcustom leetcode-result-timeout 60
   "Maximum seconds to wait for a LeetCode test or submission result."
@@ -216,6 +223,12 @@ in 'leetcode.el'."
 (defvar leetcode--lang leetcode-prefer-language
   "LeetCode programming language or sql for current problem internally.
 Default is programming language.")
+
+(defvar-local leetcode--problem-slug nil
+  "Canonical slug of the problem in this solution buffer.")
+
+(defvar-local leetcode--problem-url nil
+  "Canonical browser URL of the problem in this solution buffer.")
 
 (defvar leetcode--description-window nil
   "(Internal) Holds the reference to description window.")
@@ -367,6 +380,15 @@ query problemsetQuestionListV2($filters: QuestionFilterInput, $limit: Int, $sear
 query questionTitle($titleSlug: String!) {
   question(titleSlug: $titleSlug) { questionId questionFrontendId title titleSlug
                                     isPaidOnly difficulty likes dislikes categoryTitle } }")
+
+(defconst leetcode--graphql-workspace-question "
+query workspaceQuestion($titleSlug: String!) {
+  question(titleSlug: $titleSlug) {
+    questionId questionFrontendId title titleSlug isPaidOnly difficulty
+    likes dislikes content exampleTestcaseList
+    codeSnippets { lang langSlug code }
+  }
+}")
 
 (defconst leetcode--graphql-question-content "
 query questionContent($titleSlug: String!) {
@@ -535,7 +557,9 @@ Such as 'Two Sum' will be converted to 'two-sum'. 'Pow(x, n)' will be 'powx-n'"
 (defun leetcode--code-buffer-data ()
   "Get code buffer content, that is, the `current-buffer'."
   (let ((code (leetcode--buffer-content (current-buffer)))
-        (pattern (concat leetcode--code-start "\\([\0-\377]*?\\)" leetcode--code-end)))
+        (pattern (concat (regexp-quote leetcode--code-start)
+                         "\\(\\(?:.\\|\n\\)*?\\)"
+                         (regexp-quote leetcode--code-end))))
     (if (string-match pattern code)
         (match-string 1 code)
       code)))
@@ -544,9 +568,48 @@ Such as 'Two Sum' will be converted to 'two-sum'. 'Pow(x, n)' will be 'powx-n'"
   "Get slug title before try or submit with CODE-BUF.
 LeetCode require slug-title as the request parameters."
   (with-current-buffer code-buf
-    (if leetcode-save-solutions
-        (file-name-base (cadr (s-split "_" (buffer-name))))
-      (file-name-base (buffer-name)))))
+    (or leetcode--problem-slug
+        (if leetcode-save-solutions
+            (file-name-base (cadr (s-split "_" (buffer-name))))
+          (file-name-base (buffer-name))))))
+
+(defun leetcode--slug-from-url (url)
+  "Extract a problem slug from a LeetCode URL, or signal `user-error'."
+  (let* ((parsed (url-generic-parse-url (string-trim url)))
+         (path (url-filename parsed)))
+    (unless (and (member (url-type parsed) '("http" "https"))
+                 (member (url-host parsed) '("leetcode.com" "www.leetcode.com"))
+                 (string-match
+                  "\\`/problems/\\([a-z0-9]+\\(?:-[a-z0-9]+\\)*\\)\\(?:[/?#]\\|\\'\\)"
+                  path))
+      (user-error "Expected a leetcode.com/problems/PROBLEM/ URL"))
+    (match-string 1 path)))
+
+(defun leetcode--clipboard-problem-url ()
+  "Return a valid problem URL from the clipboard or kill ring, if any."
+  (let ((candidates (list (ignore-errors (gui-get-selection 'CLIPBOARD 'STRING))
+                          (car kill-ring))))
+    (seq-find (lambda (value)
+                (and (stringp value)
+                     (ignore-errors (leetcode--slug-from-url value))))
+              candidates)))
+
+(defun leetcode-copy-solution ()
+  "Copy submission code from the current LeetCode solution buffer."
+  (interactive)
+  (unless (bound-and-true-p leetcode-solution-mode)
+    (user-error "Run this command in a LeetCode solution buffer"))
+  (kill-new (leetcode--code-buffer-data))
+  (message "LeetCode solution copied"))
+
+(defun leetcode-return-to-browser ()
+  "Copy the current solution and open its problem in the browser.
+Paste and submit there so browser extensions can observe the submission."
+  (interactive)
+  (unless (and (bound-and-true-p leetcode-solution-mode) leetcode--problem-url)
+    (user-error "Run this command in a LeetCode solution buffer"))
+  (leetcode-copy-solution)
+  (funcall leetcode-browser-function leetcode--problem-url))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; LeetCode API ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -591,6 +654,37 @@ of QUERY-NAME."
   (setf (leetcode-user-id leetcode--user) .data.userStatus.userId)
   (setf (leetcode-user-username leetcode--user) .data.userStatus.username)
   (setf (leetcode-user-is-premium leetcode--user) .data.userStatus.isPremium))
+
+(leetcode--define-graphql workspace-question (title-slug)
+  (unless (and .data.question.questionFrontendId .data.question.title
+               .data.question.titleSlug .data.question.content)
+    (user-error "Cannot load %s: unavailable problem, login required, or API error: %s"
+                title-slug (or .errors "no problem data")))
+  (let ((problem (make-leetcode-problem
+                  :id .data.question.questionFrontendId
+                  :backend-id .data.question.questionId
+                  :title .data.question.title
+                  :title-slug .data.question.titleSlug
+                  :paid-only (eq .data.question.isPaidOnly t)
+                  :difficulty .data.question.difficulty
+                  :likes (or .data.question.likes 0)
+                  :dislikes (or .data.question.dislikes 0)
+                  :content .data.question.content
+                  :testcases (append .data.question.exampleTestcaseList nil)
+                  :snippets (seq-map
+                             (lambda (snippet)
+                               (make-leetcode-snippet
+                                :lang (alist-get 'lang snippet)
+                                :lang-slug (alist-get 'langSlug snippet)
+                                :code (alist-get 'code snippet)))
+                             .data.question.codeSnippets))))
+    (setf (leetcode-problems-problems leetcode--problems)
+          (cons problem
+                (seq-remove (lambda (existing)
+                              (equal (leetcode-problem-title-slug existing)
+                                     (leetcode-problem-title-slug problem)))
+                            (leetcode-problems-problems leetcode--problems))))
+    problem))
 
 (leetcode--define-graphql problemset-question-list-v2 (category-slug skip limit filters search-keyword sort-by)
   (let ((problems)
@@ -1009,6 +1103,45 @@ row."
         (let ((qid .data.activeDailyCodingChallengeQuestion.question.qid))
           (leetcode-show-problem qid))))))
 
+;;;###autoload(autoload 'leetcode-setup-from-url "leetcode" nil t)
+(aio-defun leetcode-setup-from-url (url)
+  "Start a fresh attempt at the LeetCode problem at URL.
+Default to a problem URL on the clipboard or kill ring.  Fetch the
+problem directly, without loading the problems list.  Preserve previous
+code in a separate attempt buffer; save that buffer to retain it across
+Emacs sessions.  Test inputs run remotely with `leetcode-try'."
+  (interactive (list (read-string "LeetCode problem URL: "
+                                  (leetcode--clipboard-problem-url))))
+  (condition-case err
+      (let* ((slug (leetcode--slug-from-url url))
+             (request (leetcode--fetch-workspace-question slug))
+             (timer (run-at-time 30 nil #'aio-cancel request))
+             (problem (unwind-protect
+			  (condition-case nil
+                              (aio-await request)
+                            (aio-cancel
+                             (user-error "LeetCode fetch timed out; check connectivity and browser access")))
+			(cancel-timer timer))))
+	(unless (leetcode-problem-p problem)
+	  (user-error "Could not fetch problem %s; check the LeetCode response buffer" slug))
+	;; Validate before touching any existing code or changing the layout.
+	(let ((leetcode--lang leetcode-prefer-language))
+	  (leetcode--set-lang (leetcode-problem-snippets problem))
+	  (unless (seq-find (lambda (snippet)
+                              (equal (leetcode-snippet-lang-slug snippet) leetcode--lang))
+                            (leetcode-problem-snippets problem))
+            (user-error "Problem %s has no %s starter code" slug leetcode--lang)))
+	(leetcode--show-problem problem)
+	(let ((buffer (leetcode--start-coding problem t)))
+	  (pop-to-buffer buffer)
+	  (goto-char (point-min))
+	  (message "Fresh LeetCode attempt ready; C-c C-t tests, C-c C-b copies and opens browser")
+	  buffer))
+    (error
+     ;; Async errors live in promises; also make failures visible to M-x users.
+     (message "LeetCode setup failed: %s" (error-message-string err))
+     (signal (car err) (cdr err)))))
+
 (aio-defun leetcode-try ()
   "Asynchronously test the code using customized testcase."
   (interactive)
@@ -1385,15 +1518,19 @@ Call `leetcode-solve-problem' on the current problem id."
             leetcode-prefer-sql
           leetcode-prefer-language)))
 
-(defun leetcode--get-code-buffer-name (title)
-  "Get code buffer name by TITLE and `leetcode-prefer-language'."
+(defun leetcode--get-code-buffer-name (title &optional problem)
+  "Get code buffer name by TITLE and `leetcode--lang'.
+When PROBLEM is supplied, use its canonical slug and frontend ID."
   (let* ((suffix (assoc-default
                   leetcode--lang
                   leetcode--lang-suffixes))
-         (slug-title (leetcode--slugify-title title))
+         (slug-title (if problem (leetcode-problem-title-slug problem)
+                       (leetcode--slugify-title title)))
          (title-with-suffix (concat slug-title suffix)))
     (if leetcode-save-solutions
-        (format "%s_%s" (leetcode--get-problem-id slug-title) title-with-suffix)
+        (format "%s_%s" (if problem (leetcode-problem-id problem)
+                            (leetcode--get-problem-id slug-title))
+                title-with-suffix)
       title-with-suffix)))
 
 (defun leetcode--get-code-buffer (buf-name)
@@ -1427,17 +1564,40 @@ Call `leetcode-solve-problem' on the current problem id."
   "Get id of the current problem."
   (aref (tabulated-list-get-entry) 1))
 
-(defun leetcode--start-coding (problem)
+(defun leetcode--archive-attempt ()
+  "Preserve the current buffer's code in a separate attempt buffer.
+Return the archive buffer, or nil if the current buffer is empty.
+Archives stay in memory until explicitly saved by the user."
+  (unless (zerop (buffer-size))
+    (let ((source (current-buffer))
+          (mode major-mode)
+          (archive (generate-new-buffer
+                    (format "%s attempt %s" (buffer-name)
+                            (format-time-string "%Y-%m-%d %H:%M:%S")))))
+      (with-current-buffer archive
+        (insert-buffer-substring source)
+        (funcall mode)
+        (set-buffer-modified-p t))
+      (message "Previous attempt preserved in %s (save it to keep across sessions)"
+               (buffer-name archive))
+      archive)))
+
+(defun leetcode--start-coding (problem &optional fresh)
   "Create a buffer for coding PROBLEM.
-The buffer will be not associated with any file.  It will choose
-major mode by `leetcode-prefer-language'and `auto-mode-alist'."
+Use a file when `leetcode-save-solutions' is non-nil.  Choose the
+major mode by `leetcode-prefer-language' and `auto-mode-alist'.
+With FRESH, archive existing code before inserting the starter template.
+Return the solution buffer."
   (let* ((title (leetcode-problem-title problem))
          (slug-title (leetcode-problem-title-slug problem))
          (problem-id (leetcode-problem-id problem))
          (snippets (leetcode-problem-snippets problem))
          (testcases (leetcode-problem-testcases problem))
          (testcase-buf-name (leetcode--testcase-buffer-name problem-id))
-         (result-buf-name (leetcode--result-buffer-name problem-id)))
+         (result-buf-name (leetcode--result-buffer-name problem-id))
+         (leetcode--lang leetcode--lang)
+         (language nil)
+         (solution-buffer nil))
 
     ;; Record windows opened for later cleanup.
     (unless (member title leetcode--problem-titles)
@@ -1447,12 +1607,17 @@ major mode by `leetcode-prefer-language'and `auto-mode-alist'."
 
     ;; Set current programming language.
     (leetcode--set-lang snippets)
+    (setq language leetcode--lang)
 
     ;; Setup code buffer
-    (let* ((code-buf-name (leetcode--get-code-buffer-name title))
+    (let* ((code-buf-name (leetcode--get-code-buffer-name title problem))
            (code-buf (leetcode--get-code-buffer code-buf-name))
            (suffix (assoc-default leetcode--lang leetcode--lang-suffixes)))
       (with-current-buffer code-buf
+        (setq-local leetcode--lang language)
+        (when fresh
+          (leetcode--archive-attempt)
+          (erase-buffer))
         (when (= (buffer-size code-buf) 0)
           (let* ((snippet (seq-find (lambda (s)
                                       (equal (leetcode-snippet-lang-slug s) leetcode--lang))
@@ -1463,7 +1628,13 @@ major mode by `leetcode-prefer-language'and `auto-mode-alist'."
             (leetcode--insert-code-end-marker)
             (leetcode--replace-in-buffer "" "")))
         (funcall (assoc-default suffix auto-mode-alist #'string-match-p))
+        (setq-local leetcode--lang language
+                    leetcode--problem-slug slug-title
+                    leetcode--problem-url (format "%s/problems/%s/"
+                                                 leetcode--url-base slug-title))
         (leetcode-solution-mode t))
+
+      (setq solution-buffer code-buf)
 
       (display-buffer code-buf
                       '((display-buffer-reuse-window
@@ -1477,7 +1648,8 @@ major mode by `leetcode-prefer-language'and `auto-mode-alist'."
       (set-window-buffer leetcode--testcase-window (current-buffer)))
     (with-current-buffer (get-buffer-create result-buf-name)
       (erase-buffer)
-      (set-window-buffer leetcode--result-window (current-buffer)))))
+      (set-window-buffer leetcode--result-window (current-buffer)))
+    solution-buffer))
 
 (aio-defun leetcode-restore-layout ()
   "This command should be run in LeetCode code buffer.
@@ -1587,6 +1759,8 @@ It will restore the layout based on current buffer's name."
     (prog1 map
       (define-key map (kbd "C-c C-t") #'leetcode-try)
       (define-key map (kbd "C-c C-s") #'leetcode-submit)
+      (define-key map (kbd "C-c C-w") #'leetcode-copy-solution)
+      (define-key map (kbd "C-c C-b") #'leetcode-return-to-browser)
       (define-key map (kbd "C-c C-r") #'leetcode-restore-layout)))
   "Keymap for `leetcode-solution-mode'.")
 
