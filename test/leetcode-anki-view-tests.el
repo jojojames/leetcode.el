@@ -1,0 +1,93 @@
+;;; leetcode-anki-view-tests.el --- Anki card tabs -*- lexical-binding: t; -*-
+
+(require 'ert)
+(require 'leetcode-anki)
+(require 'leetcode-tabs-tests)
+
+(defun leetcode-anki-view-test--card ()
+  "Return an HTML card with distinct front and back text."
+  '((cardId . 321) (fields . ((slug . ((value . "two-sum")))))
+    (deckName . "LeetCode::NeetCode150")
+    (question . "<h2>QUESTION FRONT</h2><p>Try to recall the approach.</p>")
+    (answer . "<h2>QUESTION FRONT</h2><p>SECRET ANSWER</p>")
+    (buttons . (1 2 3 4)) (nextReviews . ("1m" "10m" "1d" "4d"))))
+
+(ert-deftest leetcode-anki-view-reuses-tab-and-hides-answer ()
+  (leetcode-tabs-test--with-workspace
+    (let ((card (leetcode-anki-view-test--card))
+          (leetcode-anki--active nil))
+      (cl-letf (((symbol-function 'leetcode-anki--request)
+                 (lambda (action &optional _)
+                   (pcase action
+                     ("guiReviewActive" t)
+                     ("guiCurrentCard" card)
+                     (_ (ert-fail "Viewing a card must not answer or modify it"))))))
+        (let ((view (leetcode-anki-view-card)))
+          (should (= (length (tab-bar-tabs)) 2))
+          (should (derived-mode-p 'leetcode-anki-card-mode))
+          (should buffer-read-only)
+          (should (string-match-p "QUESTION FRONT" (buffer-string)))
+          (should-not (string-match-p "SECRET ANSWER" (buffer-string)))
+          (leetcode-anki-view-answer)
+          (should (string-match-p "SECRET ANSWER" (buffer-string)))
+          (should (eq (leetcode-anki-view-card) view))
+          (should (= (length (tab-bar-tabs)) 2))
+          (should-not (string-match-p "SECRET ANSWER" (buffer-string)))
+          (setq card (cons '(cardId . 999) (assq-delete-all 'cardId card)))
+          (should-error (leetcode-anki-view-answer) :type 'user-error)
+          (tab-bar-switch-to-tab "Workspace test")
+          (should (eq (window-buffer) source))
+          (should (get-buffer-window other)))))))
+
+(ert-deftest leetcode-anki-view-rates-explicitly-and-resumes-problem-tab ()
+  (leetcode-tabs-test--with-workspace
+    (let* ((card (leetcode-anki-view-test--card))
+           (session (leetcode-anki--make-session
+                     :card-id 321 :slug "two-sum" :deck "LeetCode::NeetCode150"
+                     :buffer source :state 'solving))
+           (leetcode-anki--active session)
+           (leetcode-anki--selected-deck "LeetCode::NeetCode150")
+           (answers nil))
+      (setq-local leetcode-anki--session session
+                  leetcode-anki--problem-tab "Workspace test")
+      (cl-letf (((symbol-function 'leetcode-anki--request)
+                 (lambda (action &optional params)
+                   (pcase action
+                     ("guiReviewActive" t)
+                     ("guiCurrentCard" card)
+                     ("guiShowAnswer" t)
+                     ("guiAnswerCard" (push (alist-get 'ease params) answers) t)
+                     (_ (ert-fail (format "Unexpected action %s" action)))))))
+        (leetcode-anki-view-card)
+        (leetcode-anki-next)
+        (should (equal (alist-get 'name (tab-bar--current-tab)) "Workspace test"))
+        (should (eq (window-buffer) source))
+        (leetcode-anki-view-card)
+        (leetcode-anki-view-answer)
+        (should-not answers)
+        (goto-char (point-min))
+        (search-forward "Good (1d)")
+        (let ((button (button-at (1- (point)))))
+          (should button)
+          (button-activate button))
+        (should (equal answers '(3)))
+        (should (eq (leetcode-anki--session-state session) 'rated))
+        (should (string-match-p "Recall recorded" (buffer-string)))
+        (should-error (leetcode-anki--view-rate 3) :type 'user-error)
+        (should (equal answers '(3)))))))
+
+(ert-deftest leetcode-anki-view-evil-bindings ()
+  (skip-unless (require 'evil nil t))
+  (with-temp-buffer
+    (leetcode-anki-card-mode)
+    (evil-local-mode 1)
+    (evil-normal-state)
+    (dolist (entry '(("gr" . leetcode-anki-view-card)
+                     ("a" . leetcode-anki-view-answer)
+                     ("r" . leetcode-anki-rate)
+                     ("n" . leetcode-anki-next)
+                     ("q" . tab-bar-close-tab)))
+      (should (eq (key-binding (kbd (car entry))) (cdr entry))))))
+
+(provide 'leetcode-anki-view-tests)
+;;; leetcode-anki-view-tests.el ends here

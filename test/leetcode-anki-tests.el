@@ -1,0 +1,185 @@
+;;; leetcode-anki-tests.el --- Anki review workflow -*- lexical-binding: t; -*-
+
+(require 'ert)
+(require 'leetcode-anki)
+
+(defun leetcode-anki-test--card (&optional id)
+  "Return a representative AnkiConnect card with ID."
+  `((cardId . ,(or id 123))
+    (fields . ((slug . ((value . "two-sum")))))
+    (deckName . "LeetCode::NeetCode150::Arrays & Hashing")
+    (buttons . (1 2 3 4)) (nextReviews . ("1m" "10m" "1d" "4d"))))
+
+(defun leetcode-anki-test--resolved (value)
+  "Return a promise resolved to VALUE."
+  (let ((promise (aio-promise)))
+    (aio-resolve promise (lambda () value))
+    promise))
+
+(defmacro leetcode-anki-test--with-review (&rest body)
+  "Run BODY in a solution associated with a mocked Anki review."
+  (declare (indent 0))
+  `(with-temp-buffer
+     (let* ((card (leetcode-anki-test--card))
+            (session (leetcode-anki--make-session
+                      :card-id 123 :slug "two-sum" :buffer (current-buffer)
+                      :deck (alist-get 'deckName card) :state 'solving))
+            (leetcode-anki--active session)
+            (leetcode-anki--selected-deck "LeetCode::NeetCode150")
+            (actions nil) (answers nil) (answer-result t) (answer-error nil))
+       (setq-local leetcode-anki--session session)
+       (cl-letf (((symbol-function 'leetcode-anki--request)
+                  (lambda (action &optional params)
+                    (push action actions)
+                    (pcase action
+                      ("guiReviewActive" t)
+                      ("guiCurrentCard" card)
+                      ("guiShowAnswer" t)
+                      ("guiAnswerCard"
+                       (push (alist-get 'ease params) answers)
+                       (when answer-error (error "Connection lost"))
+                       answer-result)
+                      (_ (error "Unexpected API action %s" action))))))
+         ,@body))))
+
+(ert-deftest leetcode-anki-rating-recorded-once ()
+  (leetcode-anki-test--with-review
+    (should (leetcode-anki-rate 3))
+    (should (equal answers '(3)))
+    (should (eq (leetcode-anki--session-state session) 'rated))
+    (should (member "guiShowAnswer" actions))
+    (should-error (leetcode-anki-rate 3) :type 'user-error)
+    (should (equal answers '(3)))))
+
+(ert-deftest leetcode-anki-rating-not-now-and-intervals ()
+  (leetcode-anki-test--with-review
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (_ choices &rest _)
+                 (should (member "Again (1m)" choices))
+                 (should (member "Good (1d)" choices))
+                 "Not now")))
+      (should-not (leetcode-anki-rate)))
+    (should-not answers)
+    (should-not (member "guiShowAnswer" actions))
+    (should (eq (leetcode-anki--session-state session) 'solving))))
+
+(ert-deftest leetcode-anki-rating-rejects-card-changed-during-prompt ()
+  (leetcode-anki-test--with-review
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (&rest _)
+                 (setq card (leetcode-anki-test--card 999))
+                 "Good (1d)")))
+      (should-error (leetcode-anki-rate) :type 'user-error))
+    (should-not answers)))
+
+(ert-deftest leetcode-anki-rating-rejects-old-attempt ()
+  (leetcode-anki-test--with-review
+    (setq leetcode-anki--session nil)
+    (should-error (leetcode-anki-rate 1) :type 'user-error)
+    (should-not answers)))
+
+(ert-deftest leetcode-anki-rating-handles-false-and-ambiguous-results ()
+  (leetcode-anki-test--with-review
+    (setq answer-result :false)
+    (should-error (leetcode-anki-rate 3) :type 'user-error)
+    (should (eq (leetcode-anki--session-state session) 'solving))
+    (setq answer-error t)
+    (should-error (leetcode-anki-rate 3))
+    (should (eq (leetcode-anki--session-state session) 'uncertain))
+    (should-error (leetcode-anki-rate 3) :type 'user-error)
+    (should (= (length answers) 2))))
+
+(ert-deftest leetcode-anki-submission-prompts-only-once-after-accepted ()
+  (leetcode-anki-test--with-review
+    (let ((scheduled nil)
+          (problem (make-leetcode-problem :title-slug "two-sum")))
+      (cl-letf (((symbol-function 'run-at-time)
+                 (lambda (_ _ callback arg) (push (list callback arg) scheduled))))
+        (leetcode-anki--submission-result session problem '((status_code . 11)))
+        (should-not scheduled)
+        (leetcode-anki--submission-result session problem '((status_code . 10)))
+        (leetcode-anki--submission-result session problem '((status_code . 10)))
+        (should (= (length scheduled) 1))
+        (should-not answers)
+        (setf (leetcode-anki--session-state session) 'rated)
+        (leetcode-anki--submission-result session problem '((status_code . 10)))
+        (should (= (length scheduled) 1))))))
+
+(ert-deftest leetcode-anki-old-session-cannot-prompt-for-repeated-card ()
+  (leetcode-anki-test--with-review
+    (let ((previous session))
+      (setq leetcode-anki--active (copy-leetcode-anki--session session))
+      (cl-letf (((symbol-function 'run-at-time)
+                 (lambda (&rest _) (ert-fail "Old review must not prompt"))))
+        (leetcode-anki--submission-result
+         previous (make-leetcode-problem :title-slug "two-sum") '((status_code . 10)))))))
+
+(ert-deftest leetcode-anki-prompt-cancellation-keeps-review-unrated ()
+  (leetcode-anki-test--with-review
+    (cl-letf (((symbol-function 'active-minibuffer-window) (lambda () nil))
+              ((symbol-function 'completing-read) (lambda (&rest _) (signal 'quit nil))))
+      (leetcode-anki--prompt-after-submission session))
+    (should-not answers)
+    (should (eq (leetcode-anki--session-state session) 'solving))))
+
+(ert-deftest leetcode-anki-start-prompts-for-deck-and-resumes-without-reset ()
+  (save-window-excursion
+    (let ((leetcode-anki-deck nil) (leetcode-anki--active nil)
+          (leetcode-anki--selected-deck nil)
+          (buffer (generate-new-buffer " *leetcode-anki-start-test*"))
+          (card (leetcode-anki-test--card))
+          (setups 0) (selected nil))
+      (unwind-protect
+          (cl-letf (((symbol-function 'leetcode-anki--request)
+                     (lambda (action &optional params)
+                       (pcase action
+                         ("deckNames" '("Default" "LeetCode::NeetCode150"))
+                         ("guiDeckReview" (setq selected (alist-get 'name params)) t)
+                         ("guiReviewActive" t)
+                         ("guiCurrentCard" card)
+                         (_ (ert-fail (format "Unexpected action %s" action))))))
+                    ((symbol-function 'completing-read)
+                     (lambda (_ decks &rest _)
+                       (should (member "LeetCode::NeetCode150" decks))
+                       "LeetCode::NeetCode150"))
+                    ((symbol-function 'leetcode-setup-from-url)
+                     (lambda (url)
+                       (cl-incf setups)
+                       (should (equal url "https://leetcode.com/problems/two-sum/"))
+                       (leetcode-anki-test--resolved buffer))))
+            (should (eq buffer (aio-wait-for (leetcode-anki-start))))
+            (should (equal selected "LeetCode::NeetCode150"))
+            (should (= setups 1))
+            (with-current-buffer buffer
+              (should (eq leetcode-anki--session leetcode-anki--active))
+              (should leetcode-submission-result-hook))
+            (leetcode-anki-next)
+            (should (= setups 1)))
+        (kill-buffer buffer)))))
+
+(ert-deftest leetcode-anki-empty-queue-does-not-reset-or-rate ()
+  (let ((leetcode-anki--selected-deck "LeetCode::NeetCode150")
+        (leetcode-anki--active nil))
+    (cl-letf (((symbol-function 'leetcode-anki--request)
+               (lambda (action &optional _)
+                 (should (equal action "guiReviewActive"))
+                 :false)))
+      (leetcode-anki-next)
+      (should-not leetcode-anki--active))))
+
+(ert-deftest leetcode-anki-api-errors-are-visible-and-buffers-cleaned ()
+  (dolist (json '("{\"result\":null,\"error\":\"Unknown deck\"}"
+                  "{\"result\":false,\"error\":null}"))
+    (let ((buffer (generate-new-buffer " *leetcode-anki-http-test*")))
+      (with-current-buffer buffer
+        (setq-local url-http-response-status 200
+                    url-http-end-of-headers (point-min))
+        (insert json))
+      (cl-letf (((symbol-function 'url-retrieve-synchronously) (lambda (&rest _) buffer)))
+        (if (string-match-p "Unknown deck" json)
+            (should-error (leetcode-anki--request "deckNames") :type 'user-error)
+          (should-error (leetcode-anki--require-success "guiDeckReview") :type 'user-error)))
+      (should-not (buffer-live-p buffer)))))
+
+(provide 'leetcode-anki-tests)
+;;; leetcode-anki-tests.el ends here
