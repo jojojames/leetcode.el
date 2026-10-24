@@ -137,6 +137,13 @@ Choose the browser containing your review extension."
   :group 'leetcode
   :type 'function)
 
+(defcustom leetcode-run-on-save t
+  "Whether saving a LeetCode solution runs its test cases remotely.
+This calls `leetcode-try', like C-c C-t, and never submits a solution.
+Only buffers with `leetcode-solution-mode' enabled are affected."
+  :group 'leetcode
+  :type 'boolean)
+
 (defcustom leetcode-result-timeout 60
   "Maximum seconds to wait for a LeetCode test or submission result."
   :group 'leetcode
@@ -1784,12 +1791,28 @@ It will restore the layout based on current buffer's name."
       (define-key map (kbd "C-c C-r") #'leetcode-restore-layout)))
   "Keymap for `leetcode-solution-mode'.")
 
+(defun leetcode--run-after-save ()
+  "Run tests after saving a solution when `leetcode-run-on-save' is enabled."
+  (when (and leetcode-run-on-save leetcode-solution-mode)
+    (condition-case err
+        (aio-listen (leetcode-try)
+                    (lambda (result)
+                      (condition-case err
+                          (funcall result)
+                        (error (message "LeetCode tests after save failed: %s"
+                                        (error-message-string err))))))
+      (error (message "LeetCode tests after save failed: %s"
+                      (error-message-string err))))))
+
 (define-minor-mode leetcode-solution-mode
   "Minor mode to provide shortcut and hooks."
   :require 'leetcode
   :lighter " LC-Solution"
   :group 'leetcode
-  :keymap leetcode-solution-mode-map)
+  :keymap leetcode-solution-mode-map
+  (if leetcode-solution-mode
+      (add-hook 'after-save-hook #'leetcode--run-after-save nil t)
+    (remove-hook 'after-save-hook #'leetcode--run-after-save t)))
 
 (provide 'leetcode)
 ;;; leetcode.el ends here
