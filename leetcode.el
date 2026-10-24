@@ -248,6 +248,12 @@ Default is programming language.")
 (defvar-local leetcode--problem-url nil
   "Canonical browser URL of the problem in this solution buffer.")
 
+(defvar leetcode-submission-result-hook nil
+  "Functions called with PROBLEM and RESULT after a submission is judged.
+Run in the originating solution buffer, after displaying the final result.
+Capture the hook when submission begins, so a later attempt cannot receive
+an earlier submission's result.  Test runs and saves do not run this hook.")
+
 (defvar leetcode--description-window nil
   "(Internal) Holds the reference to description window.")
 
@@ -1208,27 +1214,39 @@ Reuse a visible result buffer; otherwise let `display-buffer' open one."
                 interpret-id problem
                 (apply-partially #'leetcode--show-run-result #'leetcode--show-testcases-result)))))
 
+(defun leetcode--finish-submission (buffer hooks problem problem-id result)
+  "Display a judged submission RESULT and run its captured HOOKS.
+BUFFER is the originating solution buffer for PROBLEM with PROBLEM-ID."
+  (leetcode--show-run-result #'leetcode--show-submission-result problem-id result)
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (let ((leetcode-submission-result-hook hooks))
+        (run-hook-with-args 'leetcode-submission-result-hook problem result)))))
+
 (aio-defun leetcode-submit ()
   "Asynchronously submit code without resetting the window layout."
   (interactive)
-  (aio-await (leetcode--ensure-login t))
-  (let* ((code-buf (current-buffer))
-         (code (leetcode--code-buffer-data))
-         (slug-title (leetcode--get-slug-title code-buf))
-         (problem (leetcode--get-problem slug-title))
-         (problem-id (leetcode-problem-id problem))
-         (backend-id (leetcode-problem-backend-id problem))
-         (_ (leetcode--prepare-result-buffer problem-id))
-         (response (aio-await (leetcode--api-submit backend-id slug-title code)))
-         (response-status (car response))
-         (response-buffer (cdr response)))
-    (if-let ((error-info (plist-get response-status :error)))
-        (switch-to-buffer response-buffer)
-      (let* ((resp (leetcode--parse-buffer response-buffer))
-             (submission-id (number-to-string (alist-get 'submission_id resp))))
-        (aio-await (leetcode--api-check-submission
-                    submission-id problem
-                    (apply-partially #'leetcode--show-run-result #'leetcode--show-submission-result)))))))
+  (let ((source-buffer (current-buffer))
+        (hooks (copy-sequence leetcode-submission-result-hook)))
+    (aio-await (leetcode--ensure-login t))
+    (let* ((code-buf source-buffer)
+           (code (leetcode--code-buffer-data))
+           (slug-title (leetcode--get-slug-title code-buf))
+           (problem (leetcode--get-problem slug-title))
+           (problem-id (leetcode-problem-id problem))
+           (backend-id (leetcode-problem-backend-id problem))
+           (_ (leetcode--prepare-result-buffer problem-id))
+           (response (aio-await (leetcode--api-submit backend-id slug-title code)))
+           (response-status (car response))
+           (response-buffer (cdr response)))
+      (if-let ((error-info (plist-get response-status :error)))
+          (switch-to-buffer response-buffer)
+        (let* ((resp (leetcode--parse-buffer response-buffer))
+               (submission-id (number-to-string (alist-get 'submission_id resp))))
+          (aio-await (leetcode--api-check-submission
+                      submission-id problem
+                      (apply-partially #'leetcode--finish-submission
+                                       source-buffer hooks problem))))))))
 
 (defun leetcode--solving-window-layout ()
   "Specify layout for solving problem.
