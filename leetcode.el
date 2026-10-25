@@ -831,6 +831,19 @@ of QUERY-NAME."
     (aio-await (leetcode--fetch-question-testcases
                 (leetcode-problem-title-slug problem)))))
 
+(defun leetcode--check-http-response (response)
+  "Signal a concise HTTP error for RESPONSE without displaying its body."
+  (let ((buffer (cdr response)))
+    (with-current-buffer buffer
+      (let ((status (and (boundp 'url-http-response-status)
+                         url-http-response-status)))
+        (when (eq status 429)
+          (user-error "LeetCode rate limit reached (HTTP 429); wait before testing or submitting again"))
+        (when (or (and (numberp status) (>= status 400))
+                  (plist-get (car response) :error))
+          (user-error "LeetCode request failed%s"
+                      (if (numberp status) (format " (HTTP %s)" status) "")))))))
+
 (aio-defun leetcode--api-interpret-solution  (problem)
   "Fetch PROBLEM interpret_id."
   (let* ((title-slug (leetcode-problem-title-slug problem))
@@ -845,14 +858,12 @@ of QUERY-NAME."
                                       ,(leetcode--referer (format leetcode--url-problems title-slug))))
          (url-request-data payload)
          (response (aio-await (aio-url-retrieve (format leetcode--url-try title-slug))))
-         (response-status (car response))
          (response-buffer (cdr response)))
-    (if-let ((error-info (plist-get response-status :error)))
+    (unwind-protect
         (progn
-          (switch-to-buffer response-buffer)
-          (leetcode--warn "LeetCode interpret problem ERROR: %S" error-info))
-      (let-alist (with-current-buffer response-buffer (goto-char url-http-end-of-headers) (json-read))
-        .interpret_id))))
+          (leetcode--check-http-response response)
+          (alist-get 'interpret_id (leetcode--parse-buffer response-buffer)))
+      (when (buffer-live-p response-buffer) (kill-buffer response-buffer)))))
 
 (aio-defun leetcode--api-submit (backend-id slug-title code)
   "Submit CODE for problem which has BACKEND-ID and SLUG-TITLE."
@@ -883,6 +894,7 @@ Stop after `leetcode-result-timeout' seconds and report errors visibly."
                 `(,@(aio-await (leetcode--common-extra-headers))
                   ,(leetcode--referer (format leetcode--url-problems title-slug))))
                (finished nil)
+               (poll-delay 1)
                (result nil))
           (while (not finished)
             (let ((remaining (- deadline (float-time))))
@@ -901,9 +913,7 @@ Stop after `leetcode-result-timeout' seconds and report errors visibly."
                      (buffer (cdr response)))
                 (unwind-protect
                     (progn
-                      (when (plist-get (car response) :error)
-                        (user-error "LeetCode result request failed: %S"
-                                    (plist-get (car response) :error)))
+                      (leetcode--check-http-response response)
                       (setq result (leetcode--parse-buffer buffer)))
                   (when (buffer-live-p buffer) (kill-buffer buffer)))))
             (let ((state (alist-get 'state result)))
@@ -911,7 +921,8 @@ Stop after `leetcode-result-timeout' seconds and report errors visibly."
                 ("SUCCESS" (setq finished t))
                 ((or "PENDING" "STARTED" "RUNNING_TESTS" "JUDGING")
                  (message "LeetCode testing: %s..." state)
-                 (aio-await (aio-sleep 0.5)))
+                 (aio-await (aio-sleep poll-delay))
+                 (setq poll-delay (min 5 (* 2 poll-delay))))
                 (_ (user-error "Unexpected LeetCode result state: %S" state)))))
           (funcall on-success problem-id result)))
     (error
@@ -1237,14 +1248,18 @@ BUFFER is the originating solution buffer for PROBLEM with PROBLEM-ID."
            (backend-id (leetcode-problem-backend-id problem))
            (_ (leetcode--prepare-result-buffer problem-id))
            (response (aio-await (leetcode--api-submit backend-id slug-title code)))
-           (response-status (car response))
            (response-buffer (cdr response)))
-      (if-let ((error-info (plist-get response-status :error)))
-          (switch-to-buffer response-buffer)
-        (let* ((resp (leetcode--parse-buffer response-buffer))
-               (submission-id (number-to-string (alist-get 'submission_id resp))))
+      (let ((resp (unwind-protect
+                      (progn
+                        (leetcode--check-http-response response)
+                        (leetcode--parse-buffer response-buffer))
+                    (when (buffer-live-p response-buffer)
+                      (kill-buffer response-buffer)))))
+        (let ((submission-id (alist-get 'submission_id resp)))
+          (unless (integerp submission-id)
+            (user-error "LeetCode did not return a submission ID"))
           (aio-await (leetcode--api-check-submission
-                      submission-id problem
+                      (number-to-string submission-id) problem
                       (apply-partially #'leetcode--finish-submission
                                        source-buffer hooks problem))))))))
 
