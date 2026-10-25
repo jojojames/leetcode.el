@@ -47,6 +47,8 @@ This path is independent of the Anki deck name and solution directory."
   :type 'number
   :group 'leetcode-anki)
 
+(declare-function evil-define-key* "evil-core")
+
 (cl-defstruct (leetcode-anki--session (:constructor leetcode-anki--make-session))
   card-id slug deck buffer (state 'loading) prompt-pending)
 
@@ -332,7 +334,7 @@ n to open or resume the problem, and q to close the view tab."
   :group 'leetcode-anki)
 
 (with-eval-after-load 'evil
-  (evil-define-key 'normal leetcode-anki-card-mode-map
+  (evil-define-key* 'normal leetcode-anki-card-mode-map
     (kbd "gr") #'leetcode-anki-view-card
     (kbd "a") #'leetcode-anki-view-answer
     (kbd "r") #'leetcode-anki-rate
