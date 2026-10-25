@@ -159,13 +159,40 @@
             (should (= setups 1)))
         (kill-buffer buffer)))))
 
+(ert-deftest leetcode-anki-next-reopens-inactive-reviewer-and-waits ()
+  (let ((leetcode-anki--selected-deck "LeetCode::NeetCode150")
+        (ready nil) (busy 0) (opens 0)
+        (card '((cardId . 123))))
+    (cl-letf (((symbol-function 'leetcode-anki--request)
+               (lambda (action &optional params)
+                 (pcase action
+                   ("guiReviewActive"
+                    (when (> busy 0)
+                      (cl-decf busy)
+                      (error "AnkiConnect guiReviewActive: A collection operation is active."))
+                    (if ready t :false))
+                   ("guiCurrentCard" card)
+                   ("guiDeckReview"
+                    (should (equal (alist-get 'name params) leetcode-anki--selected-deck))
+                    (cl-incf opens)
+                    (setq ready t busy 2)
+                    t)
+                   (_ (ert-fail (format "Unexpected action %s" action))))))
+              ((symbol-function 'accept-process-output) #'ignore))
+      (should (equal (leetcode-anki--next-card) card))
+      (should (= opens 1))
+      (should (equal (leetcode-anki--next-card) card))
+      (should (= opens 1)))))
+
 (ert-deftest leetcode-anki-empty-queue-does-not-reset-or-rate ()
   (let ((leetcode-anki--selected-deck "LeetCode::NeetCode150")
         (leetcode-anki--active nil))
     (cl-letf (((symbol-function 'leetcode-anki--request)
                (lambda (action &optional _)
-                 (should (equal action "guiReviewActive"))
-                 :false)))
+                 (pcase action
+                   ("guiReviewActive" :false)
+                   ("guiDeckReview" t)
+                   (_ (ert-fail (format "Unexpected action %s" action)))))))
       (leetcode-anki-next)
       (should-not leetcode-anki--active))))
 

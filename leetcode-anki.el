@@ -269,6 +269,33 @@ Agent startup errors or cancellation leave the Anki attempt usable."
        (setf (leetcode-anki--session-state session) 'failed)
        (signal (car err) (cdr err))))))
 
+(defun leetcode-anki--wait-for-current-card ()
+  "Read the reviewer after any outstanding collection operation finishes.
+Retry only the read when Anki explicitly reports a busy collection."
+  (let ((deadline (+ (float-time) 4))
+        (waiting t)
+        card)
+    (while waiting
+      (condition-case err
+          (setq card (leetcode-anki--current-card)
+                waiting nil)
+        (error
+         (unless (and (string-match-p "A collection operation is active"
+                                      (error-message-string err))
+                      (< (float-time) deadline))
+           (signal (car err) (cdr err)))
+         (accept-process-output nil 0.05))))
+    card))
+
+(defun leetcode-anki--next-card ()
+  "Return a native card, reopening the selected reviewer if inactive.
+This refreshes daily availability without extending limits or rating cards."
+  (or (leetcode-anki--wait-for-current-card)
+      (progn
+        (leetcode-anki--require-success
+         "guiDeckReview" `((name . ,leetcode-anki--selected-deck)))
+        (leetcode-anki--wait-for-current-card))))
+
 (defun leetcode-anki-next ()
   "Open the native Anki reviewer's current card in Emacs.
 Resume an unfinished attempt without resetting its code.  After rating,
@@ -279,7 +306,7 @@ Anki has already advanced its queue; this opens that next card."
     (when (and leetcode-anki--active
                (eq (leetcode-anki--session-state leetcode-anki--active) 'loading))
       (user-error "A LeetCode Anki problem is still loading"))
-    (let ((card (leetcode-anki--current-card)))
+    (let ((card (leetcode-anki--next-card)))
       (if (null card)
           (message "No Anki cards ready in %s; M-x leetcode-anki-next-force for another new problem"
                    leetcode-anki--selected-deck)
