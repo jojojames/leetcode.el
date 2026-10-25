@@ -72,6 +72,10 @@ selection; no prompt or solution is sent to the agent automatically."
 (cl-defstruct (leetcode-anki--session (:constructor leetcode-anki--make-session))
   card-id slug deck buffer (state 'loading) prompt-pending)
 
+(defun leetcode-anki--random-session-p (session)
+  "Whether SESSION belongs to the native random-card reviewer."
+  (equal (leetcode-anki--session-deck session) "LeetCode Random"))
+
 (defvar leetcode-anki--active nil
   "Current review session, distinct even when a card is repeated later.")
 (defvar leetcode-anki--selected-deck nil
@@ -150,7 +154,7 @@ Signal errors explicitly; never silently treat API errors as empty decks."
                (eq (buffer-local-value 'leetcode-anki--session
                                        (leetcode-anki--session-buffer session)) session))
     (user-error "This Anki review is already rated, inactive, or awaiting confirmation"))
-  (let ((card (leetcode-anki--next-card)))
+  (let ((card (leetcode-anki--next-card (leetcode-anki--session-deck session))))
     (unless (and card
                  (equal (alist-get 'cardId card) (leetcode-anki--session-card-id session))
                  (equal (alist-get 'deckName card) (leetcode-anki--session-deck session))
@@ -269,6 +273,78 @@ Agent startup errors or cancellation leave the Anki attempt usable."
        (setf (leetcode-anki--session-state session) 'failed)
        (signal (car err) (cdr err))))))
 
+(defun leetcode-anki--random-card (deck)
+  "Choose a topic uniformly within DECK, then a problem within that topic.
+Exclude the active attempt and prefer a different topic when available.
+Only read Anki data; do not enter its reviewer or modify scheduling."
+  (let* ((ids (leetcode-anki--request "findCards"
+                                       `((query . ,(format "deck:%S is:new -is:suspended -is:buried" deck)))))
+         (cards (and ids (leetcode-anki--request "cardsInfo" `((cards . ,(vconcat ids))))))
+         (active leetcode-anki--active)
+         (groups nil))
+    (dolist (card cards)
+      (let ((name (alist-get 'deckName card)))
+        (when (and (stringp name)
+                   (or (equal name deck) (string-prefix-p (concat deck "::") name))
+                   (not (and active
+                             (or (equal (alist-get 'cardId card)
+                                        (leetcode-anki--session-card-id active))
+                                 (equal (leetcode-anki--slug card)
+                                        (leetcode-anki--session-slug active))))))
+          (let ((group (assoc name groups)))
+            (if group
+                (push card (cdr group))
+              (push (list name card) groups))))))
+    (unless groups
+      (user-error "No other problems available in %s" deck))
+    (let* ((other-topics (and active
+                              (seq-remove
+                               (lambda (group)
+                                 (equal (car group) (leetcode-anki--session-deck active)))
+                               groups)))
+           (topics (or other-topics groups))
+           (topic (nth (random (length topics)) topics))
+           (problems (cdr topic)))
+      (nth (random (length problems)) problems))))
+
+;;;###autoload
+(defun leetcode-anki-random-force (&optional deck)
+  "Force a new Anki problem from a random topic within DECK.
+Like `leetcode-anki-next-force', extend today's allowance and schedule the
+problem through normal recall ratings, but choose a random unstudied card
+instead of the next ordered card. With a prefix, choose a deck/subdeck.
+Resume an unfinished attempt rather than replacing its code."
+  (interactive (list (when current-prefix-arg (leetcode-anki--choose-deck t))))
+  (cond
+   ((and leetcode-anki--active
+         (memq (leetcode-anki--session-state leetcode-anki--active)
+               '(loading rating uncertain)))
+    (user-error "The current Anki attempt is loading or its rating is awaiting confirmation"))
+   ((and leetcode-anki--active
+         (eq (leetcode-anki--session-state leetcode-anki--active) 'solving))
+    (leetcode-anki-next))
+   (t
+    (let* ((scope (or deck leetcode-anki--selected-deck
+                      leetcode-anki-deck (leetcode-anki--choose-deck)))
+           (_ (leetcode-anki--wait-for-current-card))
+           (card (leetcode-anki--random-card scope))
+           (selected (condition-case err
+                         (leetcode-anki--request
+                          "leetcodeReviewRandomCard"
+                          `((cardId . ,(alist-get 'cardId card)) (deck . ,scope)))
+                       (error
+                        (if (string-match-p "unsupported action" (error-message-string err))
+                            (user-error "Random force requires the updated bundled Anki add-on; install it and restart Anki")
+                          (signal (car err) (cdr err)))))))
+      (unless (equal (alist-get 'cardId selected) (alist-get 'cardId card))
+        (user-error "Anki did not select the requested random problem"))
+      (unless leetcode-anki--selected-deck
+        (setq leetcode-anki--selected-deck scope))
+      (leetcode-anki--observe (leetcode-anki--open-card selected))))))
+
+;;;###autoload
+(defalias 'leetcode-anki-random #'leetcode-anki-random-force)
+
 (defun leetcode-anki--wait-for-current-card ()
   "Read the reviewer after any outstanding collection operation finishes.
 Retry only the read when Anki explicitly reports a busy collection."
@@ -287,13 +363,13 @@ Retry only the read when Anki explicitly reports a busy collection."
          (accept-process-output nil 0.05))))
     card))
 
-(defun leetcode-anki--next-card ()
+(defun leetcode-anki--next-card (&optional deck)
   "Return a native card, reopening the selected reviewer if inactive.
 This refreshes daily availability without extending limits or rating cards."
   (or (leetcode-anki--wait-for-current-card)
       (progn
         (leetcode-anki--require-success
-         "guiDeckReview" `((name . ,leetcode-anki--selected-deck)))
+         "guiDeckReview" `((name . ,(or deck leetcode-anki--selected-deck))))
         (leetcode-anki--wait-for-current-card))))
 
 (defun leetcode-anki-next ()
@@ -306,12 +382,26 @@ Anki has already advanced its queue; this opens that next card."
     (when (and leetcode-anki--active
                (eq (leetcode-anki--session-state leetcode-anki--active) 'loading))
       (user-error "A LeetCode Anki problem is still loading"))
-    (let ((card (leetcode-anki--next-card)))
+    (when (and leetcode-anki--active
+               (leetcode-anki--random-session-p leetcode-anki--active)
+               (eq (leetcode-anki--session-state leetcode-anki--active) 'rated))
+      (leetcode-anki--wait-for-current-card)
+      (leetcode-anki--require-success
+       "guiDeckReview" `((name . ,leetcode-anki--selected-deck))))
+    (let ((card (leetcode-anki--next-card
+                 (and leetcode-anki--active
+                      (leetcode-anki--random-session-p leetcode-anki--active)
+                      (memq (leetcode-anki--session-state leetcode-anki--active) '(solving failed))
+                      (leetcode-anki--session-deck leetcode-anki--active)))))
       (if (null card)
           (message "No Anki cards ready in %s; M-x leetcode-anki-next-force for another new problem"
                    leetcode-anki--selected-deck)
         (let ((deck (alist-get 'deckName card)))
-          (unless (or (equal deck leetcode-anki--selected-deck)
+          (unless (or (and leetcode-anki--active
+                                (leetcode-anki--random-session-p leetcode-anki--active)
+                                (equal (alist-get 'cardId card)
+                                       (leetcode-anki--session-card-id leetcode-anki--active)))
+                      (equal deck leetcode-anki--selected-deck)
                       (string-prefix-p (concat leetcode-anki--selected-deck "::") deck))
             (user-error "Anki is reviewing a different deck; run leetcode-anki-start")))
         (if (and leetcode-anki--active
@@ -420,6 +510,18 @@ Choosing Not now, or cancelling, leaves the review unrated."
           (if (eq t (leetcode-anki--request "guiAnswerCard" `((ease . ,answer))))
               (progn
                 (setf (leetcode-anki--session-state session) 'rated)
+                (when (leetcode-anki--random-session-p session)
+                  ;; The native answer may still be running. Never retry it:
+                  ;; wait only on reads before returning a learning card home.
+                  (condition-case err
+                      (progn
+                        (leetcode-anki--wait-for-current-card)
+                        (leetcode-anki--require-success
+                         "leetcodeFinishRandomCard"
+                         `((cardId . ,(leetcode-anki--session-card-id session)))))
+                    (error
+                     (message "Recall recorded, but random review cleanup failed: %s"
+                              (error-message-string err)))))
                 (message "Anki recall recorded; M-x leetcode-anki-next for the next problem")
                 t)
             (setf (leetcode-anki--session-state session) 'solving)
