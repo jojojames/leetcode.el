@@ -150,7 +150,7 @@ Signal errors explicitly; never silently treat API errors as empty decks."
                (eq (buffer-local-value 'leetcode-anki--session
                                        (leetcode-anki--session-buffer session)) session))
     (user-error "This Anki review is already rated, inactive, or awaiting confirmation"))
-  (let ((card (leetcode-anki--current-card)))
+  (let ((card (leetcode-anki--next-card)))
     (unless (and card
                  (equal (alist-get 'cardId card) (leetcode-anki--session-card-id session))
                  (equal (alist-get 'deckName card) (leetcode-anki--session-deck session))

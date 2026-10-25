@@ -43,6 +43,33 @@
                       (_ (error "Unexpected API action %s" action))))))
          ,@body))))
 
+(ert-deftest leetcode-anki-rating-reopens-reviewer-and-verifies-original-card ()
+  (leetcode-anki-test--with-review
+    (let ((active nil) (opened 0))
+      (cl-letf (((symbol-function 'leetcode-anki--current-card)
+                 (lambda () (and active card)))
+                ((symbol-function 'leetcode-anki--require-success)
+                 (lambda (action &optional _)
+                   (when (equal action "guiDeckReview")
+                     (cl-incf opened)
+                     (setq active t))
+                   t)))
+        (should (leetcode-anki-rate 3))
+        (should (= opened 1))
+        (should (equal answers '(3)))))))
+
+(ert-deftest leetcode-anki-rating-rejects-different-card-after-reopening ()
+  (leetcode-anki-test--with-review
+    (let ((active nil))
+      (cl-letf (((symbol-function 'leetcode-anki--current-card)
+                 (lambda () (and active (leetcode-anki-test--card 999))))
+                ((symbol-function 'leetcode-anki--require-success)
+                 (lambda (action &optional _)
+                   (should (equal action "guiDeckReview"))
+                   (setq active t))))
+        (should-error (leetcode-anki-rate 3) :type 'user-error)
+        (should-not answers)))))
+
 (ert-deftest leetcode-anki-rating-recorded-once ()
   (leetcode-anki-test--with-review
     (should (leetcode-anki-rate 3))
