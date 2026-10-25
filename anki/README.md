@@ -206,6 +206,23 @@ extending the allowance. Force-next does not pull future reviews forward
 or raise the review-card daily limit. Update the installed add-on copy and
 restart Anki if the command reports an unsupported API action.
 
+Use **`M-x leetcode-anki-random-force`** for the random version of
+`leetcode-anki-next-force`: choose a random topic, then a random unstudied
+problem, instead of taking the next card in deck order. It extends today's
+allowance by one and uses the same submission-result hook, recall prompt,
+starting intervals, and future review scheduling. Permanent daily limits
+are unchanged. An unfinished attempt is resumed rather than replaced.
+**`C-u M-x leetcode-anki-random-force`** lets you choose a deck or subdeck.
+`leetcode-anki-random` remains an alias.
+
+The current Anki add-on uses a one-card native filtered deck named
+**LeetCode Random** to select that exact card outside the ordered queue,
+with rescheduling enabled. This is an implementation detail; rate the
+problem normally. Cards return to their original topic deck, including
+Again answers with their short learning delay. Other filtered decks retain
+native behavior. The command requires current Anki and the updated bundled
+add-on. No cards are rated automatically.
+
 Saving, testing, revealing the answer, and failed submissions never rate
 a card. Only an explicit rating advances its review. The integration
 checks both the Anki card ID and the solution attempt identity, and prevents
