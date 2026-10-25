@@ -1457,7 +1457,7 @@ will show the detail in other window and jump to it."
                       "dislikes: " (number-to-string dislikes)))
       ;; Sometimes LeetCode don't have a '<p>' at the outermost...
       (insert "<p>" content "</p>")
-      (leetcode--replace-in-buffer "" "")
+      (leetcode--replace-in-buffer "\r" "")
       ;; NOTE: shr.el can't render "https://xxxx.png", so we use "http"
       (leetcode--replace-in-buffer "https" "http")
       (shr-render-buffer (current-buffer)))
@@ -1718,7 +1718,7 @@ Return the solution buffer."
             (leetcode--insert-code-start-marker)
             (insert template-code)
             (leetcode--insert-code-end-marker)
-            (leetcode--replace-in-buffer "" "")))
+            (leetcode--replace-in-buffer "\r" "")))
         (funcall (assoc-default suffix auto-mode-alist #'string-match-p))
         (setq-local leetcode--lang language
                     leetcode--problem-slug slug-title
