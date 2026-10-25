@@ -6,6 +6,7 @@ answer handling. Other decks retain their normal scheduling.
 """
 
 from functools import wraps
+import importlib
 
 from aqt import mw
 from anki import schedv2
@@ -73,3 +74,51 @@ def install(scheduler_class):
 
 
 install(schedv2.Scheduler)
+
+
+def extend_new_cards(self, deck, count=1):
+    """Expose native Custom Study's extra new cards through AnkiConnect.
+
+    True means the native reviewer has a card. False means there are no
+    unstudied cards to unlock. Never grade a card or change preset limits.
+    """
+    if type(count) is not int or count < 1:
+        raise ValueError("Extra new-card count must be a positive integer")
+    collection = self.collection()
+    if collection.decks.byName(deck) is None:
+        raise ValueError("Deck not found: " + deck)
+    # Guard a race with another client starting a review after Emacs checked.
+    if self.guiReviewActive():
+        if collection.decks.current()["name"] != deck:
+            raise ValueError("Anki is reviewing a different deck")
+        return True
+    # Re-enter through the native reviewer first: a learning/review card
+    # may have become due since Emacs checked, requiring no extra allowance.
+    if not self.guiDeckReview(deck):
+        raise ValueError("Could not select deck: " + deck)
+    if self.guiReviewActive():
+        return True
+    scheduler = self.scheduler()
+    scheduler.reset()
+    # Native count includes the selected deck's children, without choosing
+    # a card ourselves or changing any card's due date.
+    if not scheduler.totalNewForCurrentDeck():
+        return False
+    scheduler.extendLimits(count, 0)
+    if not self.guiDeckReview(deck):
+        raise ValueError("Could not start the extended review")
+    if not self.guiReviewActive():
+        raise ValueError("Today's new-card allowance was extended, but no card became ready; check review and parent-deck limits")
+    return True
+
+
+def install_anki_connect():
+    """Register the bridge with AnkiConnect when that add-on is installed."""
+    try:
+        connector = importlib.import_module("2055492159")
+    except ModuleNotFoundError:
+        return
+    connector.AnkiConnect.leetcodeExtendNewCards = connector.util.api()(extend_new_cards)
+
+
+install_anki_connect()

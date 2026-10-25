@@ -84,6 +84,45 @@ class IntervalTests(unittest.TestCase):
             self.scheduler.answerCard(self.card(0), 3)
         self.assertEqual(self.scheduler.native_calls, 0)
 
+    def test_force_next_uses_native_daily_extension(self):
+        calls = []
+        ready = [False]
+        scheduler = types.SimpleNamespace(
+            reset=lambda: calls.append("reset"),
+            totalNewForCurrentDeck=lambda: 149,
+            extendLimits=lambda new, review: calls.append((new, review)))
+        collection = types.SimpleNamespace(decks=types.SimpleNamespace(
+            byName=lambda _: {"name": self.deck},
+            current=lambda: {"name": self.deck}))
+
+        def review(deck):
+            calls.append(("review", deck))
+            if (1, 0) in calls:
+                ready[0] = True
+            return True
+
+        api = types.SimpleNamespace(
+            collection=lambda: collection, scheduler=lambda: scheduler,
+            guiReviewActive=lambda: ready[0], guiDeckReview=review)
+        self.assertTrue(self.addon.extend_new_cards(api, self.deck))
+        self.assertEqual(calls.count((1, 0)), 1)
+        self.assertTrue(ready[0])
+        # Repeating the request with a ready card does not extend again.
+        self.assertTrue(self.addon.extend_new_cards(api, self.deck))
+        self.assertEqual(calls.count((1, 0)), 1)
+
+    def test_force_next_empty_deck_never_extends_or_ratings(self):
+        scheduler = types.SimpleNamespace(
+            reset=lambda: None, totalNewForCurrentDeck=lambda: 0)
+        api = types.SimpleNamespace(
+            collection=lambda: types.SimpleNamespace(decks=types.SimpleNamespace(
+                byName=lambda _: {"name": self.deck})),
+            scheduler=lambda: scheduler,
+            guiReviewActive=lambda: False, guiDeckReview=lambda _: True)
+        self.assertFalse(self.addon.extend_new_cards(api, self.deck))
+        with self.assertRaises(ValueError):
+            self.addon.extend_new_cards(api, self.deck, 0)
+
 
 if __name__ == "__main__":
     unittest.main()
