@@ -30,6 +30,8 @@
               (let ((window (get-buffer-window shell)))
                 (should window)
                 (should (= (window-total-width window) (window-total-width selected)))
+                (should (= (window-total-width selected)
+                           (round (* 0.51 (window-total-width (frame-root-window))))))
                 (should (> (nth 1 (window-edges window))
                            (nth 1 (window-edges selected)))))))
         (delete-directory directory t)))))

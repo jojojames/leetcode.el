@@ -167,6 +167,21 @@ Signal errors explicitly; never silently treat API errors as empty decks."
                                   (error-message-string err))))))
   promise)
 
+(defun leetcode-anki--resize-solution-column (window)
+  "Give WINDOW's code/agent column 51 percent of its horizontal split."
+  (let ((column window)
+        (parent (window-parent window)))
+    ;; Ascend through the code/agent vertical stack to resize both panes.
+    (while (and parent
+                (= (window-total-width parent) (window-total-width column)))
+      (setq column parent
+            parent (window-parent parent)))
+    (when parent
+      (let ((delta (- (round (* 0.51 (window-total-width parent)))
+                      (window-total-width column))))
+        (unless (zerop delta)
+          (window-resize column delta t))))))
+
 (defun leetcode-anki--setup-agent-shell (solution)
   "Display an agent shell below SOLUTION according to the configured policy.
 Agent startup errors or cancellation leave the Anki attempt usable."
@@ -197,6 +212,7 @@ Agent startup errors or cancellation leave the Anki attempt usable."
                     (unless (window-live-p shell-window)
                       (setq shell-window (split-window code-window nil 'below)))
                     (set-window-buffer shell-window buffer)
+                    (leetcode-anki--resize-solution-column code-window)
                     shell-window)))
             (save-selected-window
               (unless shell
