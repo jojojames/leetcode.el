@@ -11,7 +11,7 @@ import importlib
 from aqt import mw
 
 
-def interval_days(scheduler, card, ease):
+def interval_days(scheduler, card, ease, allow_filtered=False):
     """Return a learning interval, or None for native review scheduling."""
     # New, learning, and day-learning cards get problem-sized starting
     # delays. Graduated reviews retain Anki's growing intervals.
@@ -26,7 +26,7 @@ def interval_days(scheduler, card, ease):
     if name != root and not name.startswith(root + "::"):
         return None
     # Filtered decks can have different button meanings; leave them native.
-    if original:
+    if original and not allow_filtered:
         return None
     days = config.get("days", {"2": 2, "3": 5, "4": 10}).get(str(ease))
     if days is not None and (type(days) is not int or days < 1):
@@ -74,12 +74,37 @@ def install(scheduler_class):
     scheduler_class._leetcode_intervals_installed = True
 
 
-def customize_states(scheduler, card, states):
+def customize_states(scheduler, card, states, allow_filtered=False):
     """Override only learning transitions in current Anki's native states.
 
     The backend records the selected state directly, so previews, due dates,
     undo, review history, and FSRS memory remain part of the native answer.
     """
+    if states.current.WhichOneof("kind") == "filtered":
+        # Only our own rescheduling deck gets the learning interval override.
+        # Other filtered decks and preview-only sessions remain native.
+        if (scheduler.col.decks.get(card.deck_id)["name"] != RANDOM_DECK
+                or states.current.filtered.WhichOneof("kind") != "rescheduling"):
+            return
+        from anki.scheduler_pb2 import SchedulingStates
+        native = SchedulingStates()
+        for name in ("current", "again", "hard", "good", "easy"):
+            state = getattr(states, name)
+            if state.WhichOneof("kind") == "normal":
+                getattr(native, name).CopyFrom(state)
+            elif state.filtered.WhichOneof("kind") == "rescheduling":
+                getattr(native, name).normal.CopyFrom(state.filtered.rescheduling.original_state)
+            else:
+                return
+        customize_states(scheduler, card, native, allow_filtered=True)
+        for name in ("again", "hard", "good", "easy"):
+            normal = getattr(native, name).normal
+            if normal.WhichOneof("kind") == "review":
+                # Graduation exits the filtered deck through a normal state.
+                getattr(states, name).CopyFrom(getattr(native, name))
+            else:
+                getattr(states, name).filtered.rescheduling.original_state.CopyFrom(normal)
+        return
     if not states.current.HasField("normal"):
         return
     if states.current.normal.WhichOneof("kind") == "review":
@@ -88,7 +113,7 @@ def customize_states(scheduler, card, states):
     if not states.easy.normal.HasField("review"):
         return
     for ease, name in ((2, "hard"), (3, "good"), (4, "easy")):
-        days = interval_days(scheduler, card, ease)
+        days = interval_days(scheduler, card, ease, allow_filtered)
         if days is None:
             continue
         state = getattr(states, name)
@@ -252,6 +277,101 @@ def extend_new_cards_async(owner, deck, count, deferred_class, schedule):
     return result
 
 
+RANDOM_DECK = "LeetCode Random"
+
+
+def prepare_random_card(owner, card_id, deck):
+    """Put one new problem in a native rescheduling filtered deck.
+
+    Existing cards in the extra deck are never discarded. New-card limits
+    are increased for today so random review does not consume the normal
+    allowance. Original deck ownership and scheduling remain native.
+    """
+    if type(card_id) is not int or card_id < 1:
+        raise ValueError("Card ID must be a positive integer")
+    collection = owner.collection()
+    card = collection.get_card(card_id)
+    existing = collection.decks.by_name(RANDOM_DECK)
+    if existing and card.did == existing["id"] and card.odid:
+        return RANDOM_DECK
+    home = collection.decks.get(card.did)["name"]
+    if home != deck and not home.startswith(deck + "::"):
+        raise ValueError("The chosen problem is outside the selected deck")
+    if card.type != 0 or card.queue != 0 or card.odid:
+        raise ValueError("Extra credit requires an unstudied, available problem")
+    if existing:
+        if not existing.get("dyn"):
+            raise ValueError("LeetCode Random exists but is not a filtered deck")
+        if collection.db.scalar("select count(*) from cards where did=?", existing["id"]):
+            raise ValueError("Finish the existing random review problem before choosing another")
+        did = existing["id"]
+    else:
+        did = collection.decks.new_filtered(RANDOM_DECK)
+    config = collection.sched.get_or_create_filtered_deck(did)
+    config.config.reschedule = True
+    del config.config.search_terms[:]
+    term = config.config.search_terms.add()
+    term.search = f"cid:{card_id} is:new -is:suspended -is:buried"
+    term.limit = 1
+    collection.sched.add_or_update_filtered_deck(config)
+    if collection.sched.rebuild_filtered_deck(did).count != 1:
+        raise ValueError("Anki could not select the random review problem")
+    collection.decks.select(card.did)
+    collection.sched.extend_limits(1, 0)
+    return RANDOM_DECK
+
+
+def finish_random_card(owner, card_id):
+    """Return a rated learning card home without changing its next due time."""
+    if type(card_id) is not int or card_id < 1:
+        raise ValueError("Card ID must be a positive integer")
+    collection = owner.collection()
+    card = collection.get_card(card_id)
+    deck = collection.decks.by_name(RANDOM_DECK)
+    if not deck or card.did != deck["id"]:
+        return True  # Graduating answers have already returned it home.
+    if card.reps < 1 or not card.odid:
+        raise ValueError("The random review problem has not been rated")
+    ids = collection.db.list("select id from cards where did=?", deck["id"])
+    if ids != [card_id]:
+        raise ValueError("Unexpected cards in random review deck; inspect Anki")
+    collection.sched.empty_filtered_deck(deck["id"])
+    return True
+
+
+def review_random_card_async(owner, card_id, deck, deferred_class, schedule):
+    """Open the native random review reviewer and await its exact card."""
+    import time
+    result = deferred_class()
+    deadline = time.monotonic() + 4
+    collection = owner.collection()
+
+    def wait():
+        try:
+            if owner.collection() is not collection:
+                raise ValueError("Anki collection changed while opening random review")
+            if time.monotonic() >= deadline:
+                raise ValueError("Timed out opening random review; retry to resume the same card")
+            if owner.window()._background_op_count:
+                schedule(25, wait)
+                return
+            current = owner.guiCurrentCard() if owner.guiReviewActive() else None
+            if not current or current["cardId"] != card_id:
+                raise ValueError("Anki did not open the chosen random review problem")
+            result.resolve(current)
+        except Exception as error:
+            result.resolve(error=error)
+
+    try:
+        name = prepare_random_card(owner, card_id, deck)
+        if not owner.guiDeckReview(name):
+            raise ValueError("Could not open random review reviewer")
+        schedule(0, wait)
+    except Exception as error:
+        result.resolve(error=error)
+    return result
+
+
 def install_anki_connect():
     """Register the bridge with AnkiConnect when that add-on is installed."""
     try:
@@ -262,12 +382,25 @@ def install_anki_connect():
     # Keep the public action name used by Emacs through a versioned alias.
     connector.AnkiConnect.guiLeetcodeExtendNewCards = connector.util.api(
         (6, "leetcodeExtendNewCards"))(extend_new_cards)
+    connector.AnkiConnect.guiLeetcodeFinishRandomCard = connector.util.api(
+        (6, "leetcodeFinishRandomCard"))(lambda self, cardId: None)
+    connector.AnkiConnect.guiLeetcodeReviewRandomCard = connector.util.api(
+        (6, "leetcodeReviewRandomCard"))(
+            lambda self, cardId, deck: None)
     if hasattr(connector, "Legacy") and not getattr(
             connector.Legacy, "_leetcode_bridge_installed", False):
         original_call = connector.Legacy.call
 
         @wraps(original_call)
         def call(adapter, name, params):
+            if name == "guiLeetcodeFinishRandomCard":
+                return finish_random_card(adapter.owner, params["cardId"])
+            if name == "guiLeetcodeReviewRandomCard":
+                from aqt.qt import QTimer
+                protocol = importlib.import_module(connector.__name__ + ".protocol")
+                return review_random_card_async(
+                    adapter.owner, params["cardId"], params["deck"],
+                    protocol.Deferred, QTimer.singleShot)
             if name == "guiLeetcodeExtendNewCards":
                 from aqt.qt import QTimer
                 protocol = importlib.import_module(connector.__name__ + ".protocol")

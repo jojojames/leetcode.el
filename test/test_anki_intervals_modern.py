@@ -110,6 +110,70 @@ class ModernIntervalTests(unittest.TestCase):
         self.assertEqual(card.ivl, 5)
         self.assertIsNotNone(card.memory_state)
 
+    def test_random_review_uses_home_intervals_and_returns_to_home_deck(self):
+        for rating, days in ((CardAnswer.HARD, 2), (CardAnswer.GOOD, 5), (CardAnswer.EASY, 10)):
+            with self.subTest(days=days):
+                cid = self.add_card()
+                api = types.SimpleNamespace(collection=lambda: self.col)
+                name = self.addon.prepare_random_card(api, cid, "LeetCode::NeetCode150")
+                did = self.col.decks.by_name(name)["id"]
+                self.col.decks.select(did)
+                queued = self.col.sched.get_queued_cards().cards[0]
+                self.assertEqual(queued.card.id, cid)
+                self.assertEqual(queued.states.current.WhichOneof("kind"), "filtered")
+                self.assertEqual([getattr(queued.states, key).normal.review.scheduled_days
+                                  for key in ("hard", "good", "easy")], [2, 5, 10])
+                card = self.answer(queued, rating)
+                self.assertEqual(card.did, self.did)
+                self.assertEqual(card.odid, 0)
+                self.assertEqual(card.ivl, days)
+                self.assertEqual(card.due, self.col.sched.today + days)
+                self.assertEqual(self.col.db.scalar("select count(*) from revlog where cid=?", cid), 1)
+
+    def test_random_review_again_returns_learning_card_home_without_changing_due(self):
+        cid = self.add_card()
+        api = types.SimpleNamespace(collection=lambda: self.col)
+        name = self.addon.prepare_random_card(api, cid, "LeetCode::NeetCode150")
+        self.col.decks.select(self.col.decks.by_name(name)["id"])
+        queued = self.col.sched.get_queued_cards().cards[0]
+        card = self.answer(queued, CardAnswer.AGAIN)
+        due = card.due
+        self.assertTrue(self.addon.finish_random_card(api, cid))
+        card = self.col.get_card(cid)
+        self.assertEqual(card.did, self.did)
+        self.assertEqual(card.odid, 0)
+        self.assertEqual(card.queue, 1)
+        self.assertEqual(card.due, due)
+        self.assertEqual(card.reps, 1)
+        self.assertTrue(self.addon.finish_random_card(api, cid))
+
+    def test_random_review_does_not_consume_regular_allowance(self):
+        regular = self.add_card()
+        extra = self.add_card()
+        config = self.col.decks.config_dict_for_deck_id(self.did)
+        config["new"]["perDay"] = 1
+        self.col.decks.update_config(config)
+        api = types.SimpleNamespace(collection=lambda: self.col)
+        name = self.addon.prepare_random_card(api, extra, "LeetCode::NeetCode150")
+        self.col.decks.select(self.col.decks.by_name(name)["id"])
+        queued = self.col.sched.get_queued_cards().cards[0]
+        self.answer(queued, CardAnswer.GOOD)
+        self.col.decks.select(self.did)
+        self.assertEqual(self.col.sched.get_queued_cards().cards[0].card.id, regular)
+        self.assertEqual(self.col.decks.config_dict_for_deck_id(self.did)["new"]["perDay"], 1)
+
+    def test_random_review_preserves_existing_extra_card(self):
+        api = types.SimpleNamespace(collection=lambda: self.col)
+        cid = self.add_card()
+        name = self.addon.prepare_random_card(api, cid, "LeetCode::NeetCode150")
+        did = self.col.decks.by_name(name)["id"]
+        self.assertEqual(self.addon.prepare_random_card(api, cid, "LeetCode::NeetCode150"), name)
+        other = self.add_card()
+        with self.assertRaisesRegex(ValueError, "Finish the existing"):
+            self.addon.prepare_random_card(api, other, "LeetCode::NeetCode150")
+        self.assertEqual(self.col.get_card(other).did, self.did)
+        self.assertEqual(self.col.get_card(cid).did, did)
+
     def test_force_next_changes_only_todays_allowance(self):
         self.add_card()
         config = self.col.decks.config_dict_for_deck_id(self.did)
