@@ -162,7 +162,9 @@
          (leetcode-prefer-language "python3")
          (leetcode--problem-titles nil)
          (initial-buffers (buffer-list))
-         (file (expand-file-name "99999_workspace-test.py" directory)))
+         (file (expand-file-name
+                (format "99999_workspace-test_%s.py" (format-time-string "%Y-%m-%d"))
+                directory)))
     (unwind-protect
         (save-window-excursion
           (write-region "saved previous solution\n" nil file nil 'silent)
@@ -176,7 +178,8 @@
                 (should (equal (buffer-string) "saved previous solution\n")))
               (should (seq-find
                        (lambda (buffer)
-                         (and (string-prefix-p "99999_workspace-test.py attempt " (buffer-name buffer))
+                         (and (string-prefix-p (concat (file-name-nondirectory file) " attempt ")
+                                               (buffer-name buffer))
                               (equal (leetcode--buffer-content buffer) "saved previous solution\n")))
                        (buffer-list))))))
       (dolist (buffer (seq-difference (buffer-list) initial-buffers))

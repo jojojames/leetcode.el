@@ -1590,7 +1590,9 @@ Call `leetcode-solve-problem' on the current problem id."
 
 (defun leetcode--get-code-buffer-name (title &optional problem)
   "Get code buffer name by TITLE and `leetcode--lang'.
-When PROBLEM is supplied, use its canonical slug and frontend ID."
+When PROBLEM is supplied, use its canonical slug and frontend ID.
+File-backed solutions include today's local date before the extension,
+so reviews on different days keep separate files."
   (let* ((suffix (assoc-default
                   leetcode--lang
                   leetcode--lang-suffixes))
@@ -1598,9 +1600,9 @@ When PROBLEM is supplied, use its canonical slug and frontend ID."
                        (leetcode--slugify-title title)))
          (title-with-suffix (concat slug-title suffix)))
     (if leetcode-save-solutions
-        (format "%s_%s" (if problem (leetcode-problem-id problem)
-                            (leetcode--get-problem-id slug-title))
-                title-with-suffix)
+        (format "%s_%s_%s%s" (if problem (leetcode-problem-id problem)
+                                 (leetcode--get-problem-id slug-title))
+                slug-title (format-time-string "%Y-%m-%d") suffix)
       title-with-suffix)))
 
 (defun leetcode--get-code-buffer (buf-name)
