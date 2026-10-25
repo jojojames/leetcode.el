@@ -12,7 +12,11 @@ for `leetcode-anki-next-force`. This extends today's allowance only; the
 deck's permanent daily limit is unchanged. Set `days` to `{}` to disable
 the interval overrides while retaining this bridge.
 
-This add-on supports Anki 2.1's Python v2 scheduler (including 2.1.33),
-not newer Rust/FSRS schedulers. It preserves the native rating in review
-history, then explicitly reschedules the card; the history entry describes
-the native rating, while the card's due date reflects this fixed override.
+This add-on supports current Anki (tested with 26.9.3, including FSRS) and
+the older 2.1.33 Python v2 scheduler. On current Anki it changes native
+learning answer states before they are displayed or recorded, preserving
+each rating's predicted FSRS memory, lapse count, ease, native undo, and
+review history. The displayed and recorded intervals match. Graduated
+review states are unchanged. On the older scheduler it records the native
+rating and then explicitly reschedules the card; legacy review history
+retains the native interval rather than the override.

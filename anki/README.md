@@ -18,7 +18,7 @@ This guide describes the working setup used to develop this integration:
 | Solution directory | `~/Code/leetcode` |
 | Problem workspaces | New named Emacs tab per problem |
 | Tests | Remote LeetCode tests after manual saves |
-| Anki | macOS Anki 2.1.33 with its Python v2 scheduler |
+| Anki | macOS Anki 26.9.3 with its current scheduler (SM-2 or FSRS) |
 | API | AnkiConnect API v6, `http://127.0.0.1:8765` |
 | Deck source | https://github.com/jojojames/leetcode-neetcode-anki |
 | Deck repository | `~/Code/leetcode-neetcode-anki` |
@@ -26,10 +26,9 @@ This guide describes the working setup used to develop this integration:
 | New problems per day | 1 |
 | Review limit per day | 200 |
 
-Anki 2.1.33 is the version tested here, not a requirement to downgrade a
-newer installation. The Emacs client uses AnkiConnect's reviewer API. The
-optional Python scheduling add-on below is specific to the older v2
-scheduler and does not support newer Rust/FSRS schedulers.
+The current setup is tested with Anki 26.9.3. The Emacs client uses
+AnkiConnect's reviewer API v6. The bundled add-on supports both current
+Anki/FSRS and the earlier 2.1.33 Python v2 scheduler.
 
 ### 1. Load the Emacs integration
 
@@ -71,6 +70,14 @@ of the LeetCode login.
 
 Install and enable AnkiConnect in Anki (add-on ID `2055492159`). Leave Anki
 running with your intended profile open.
+
+Use a current AnkiConnect build compatible with your Anki version. The
+2021 AnkiConnect used with 2.1.33 imports PyQt5 and cannot run on current
+Qt6-based Anki. Use Anki's add-on update command or install the current
+[official source](https://git.sr.ht/~foosoft/anki-connect) (`plugin/` goes
+in the `2055492159` add-on directory). Our 26.9.3 setup is tested with
+AnkiConnect commit `62fc13d` from October 20, 2026. Preserve its local
+configuration when updating and restart Anki afterward.
 
 ```sh
 git clone https://github.com/jojojames/leetcode-neetcode-anki \
@@ -146,13 +153,14 @@ card's history and rating. Easy does not mean reviewing every ten days
 forever. A lapse returns the card to native relearning, whose next
 successful rating uses the starting delays above again.
 
-The add-on changes both interval previews and answer handling, so Anki and
-Emacs show the same intervals. It records the native rating first, then
-uses Anki's native rescheduling operation to set the learning interval,
-preserving the card's existing ease. Review history retains the native
-scheduled interval for that learning rating; the actual due date reflects
-the override. Graduated review scheduling, other decks, and filtered-deck
-reviews retain native behavior.
+The add-on changes native learning answer states before displaying or
+recording them, so Anki, Emacs, and review history agree on the interval.
+It keeps each rating's own predicted FSRS memory state, lapse count, ease,
+and native undo. Graduated review states are unchanged, allowing the
+scheduler to keep growing intervals. Other decks and filtered-deck reviews
+retain native behavior. On the older 2.1.33 scheduler, a compatibility path
+records the native rating and explicitly reschedules the card; only that
+legacy path retains the original native interval in review history.
 
 Without this add-on, `leetcode-anki.el` still works and uses Anki's native
 intervals throughout, except that force-next requires its API bridge.
@@ -223,8 +231,8 @@ project is not reused. New shells use `agent-shell-new-shell`, with the
 solution directory as their working directory and a fresh session. Agent
 selection follows that command's preferred-agent/selection behavior.
 
-The workspace keeps code above the agent shell on the left, with the
-description, test inputs, and results on the right. Focus stays in the code
+The workspace keeps code above the agent shell on the left (51% width), with
+the description, test inputs, and results on the right (49%). Focus stays in the code
 buffer. No question, solution, or prompt is sent automatically. Startup
 failure or cancellation leaves the Anki problem usable. Resuming an
 unfinished attempt does not start another shell.
@@ -258,3 +266,19 @@ The Evil bindings are installed by `leetcode-anki.el` using
 - `anki/leetcode_intervals` contains the optional Anki-side scheduling
   override and the `leetcodeExtendNewCards` AnkiConnect bridge used by
   force-next. Installing it is independent of loading the Emacs code.
+
+## Verifying scheduler compatibility
+
+The legacy unit tests run without Anki. The current-scheduler tests use
+real temporary Anki collections, including due dates, review history,
+growing intervals, FSRS memory/relearning, and daily-limit extensions.
+They never open your installed profile. With the canonical macOS app:
+
+```sh
+python3 -B -m unittest discover -s test -p 'test_anki_intervals.py'
+PYTHONPATH=/Applications/Anki.app/Contents/Resources/app_packages \
+  python3.13 -B -m unittest discover -s test -p 'test_anki_intervals_modern.py'
+```
+
+The Python minor version must match the one bundled with Anki (3.13 for
+26.9.3). Run these from the root of the client repository.
