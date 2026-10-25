@@ -47,6 +47,26 @@ This path is independent of the Anki deck name and solution directory."
   :type 'number
   :group 'leetcode-anki)
 
+(defcustom leetcode-anki-agent-shell-config 'same
+  "How to display an agent shell when opening a new Anki problem.
+With `same', reuse the most recently visited agent shell whose working
+directory matches the solution directory, or start one if none exists.
+With `new', always start a new shell.  With nil, do nothing.
+Display the shell below the solution, keeping the problem and tests on
+the right.  Starting a shell uses `agent-shell-new-shell' and its agent
+selection; no prompt or solution is sent to the agent automatically."
+  :type '(choice (const :tag "Reuse a shell from the solution directory" same)
+                 (const :tag "Start a new shell for each problem" new)
+                 (const :tag "Disable agent-shell integration" nil))
+  :group 'leetcode-anki)
+
+(defvar agent-shell-display-action)
+(defvar agent-shell-cwd-function)
+(defvar agent-shell-context-sources)
+(defvar agent-shell-session-strategy)
+(defvar agent-shell-prefer-viewport-interaction)
+(declare-function agent-shell-buffers "agent-shell")
+(declare-function agent-shell-new-shell "agent-shell")
 (declare-function evil-define-key* "evil-core")
 
 (cl-defstruct (leetcode-anki--session (:constructor leetcode-anki--make-session))
@@ -147,6 +167,61 @@ Signal errors explicitly; never silently treat API errors as empty decks."
                                   (error-message-string err))))))
   promise)
 
+(defun leetcode-anki--setup-agent-shell (solution)
+  "Display an agent shell below SOLUTION according to the configured policy.
+Agent startup errors or cancellation leave the Anki attempt usable."
+  (when leetcode-anki-agent-shell-config
+    (condition-case err
+        (when (require 'agent-shell nil t)
+          (let* ((code-window (get-buffer-window solution))
+                 (directory (with-current-buffer solution
+                              (file-name-as-directory
+                               (expand-file-name
+                                (if buffer-file-name
+                                    (file-name-directory buffer-file-name)
+                                  default-directory)))))
+                 (before (agent-shell-buffers))
+                 (shell (and (eq leetcode-anki-agent-shell-config 'same)
+                             (seq-find
+                              (lambda (buffer)
+                                (and (buffer-live-p buffer)
+                                     (file-equal-p
+                                      directory
+                                      (buffer-local-value 'default-directory buffer))))
+                              before)))
+                 (shell-window nil)
+                 (display
+                  (lambda (buffer _alist)
+                    (unless (window-live-p code-window)
+                      (user-error "The solution window is no longer visible"))
+                    (unless (window-live-p shell-window)
+                      (setq shell-window (split-window code-window nil 'below)))
+                    (set-window-buffer shell-window buffer)
+                    shell-window)))
+            (save-selected-window
+              (unless shell
+                (with-current-buffer solution
+                  (let ((default-directory directory)
+                        (agent-shell-cwd-function (lambda () directory))
+                        (agent-shell-display-action (list (list display)))
+                        (display-buffer-overriding-action (list (list display)))
+                        (agent-shell-context-sources nil)
+                        (agent-shell-session-strategy 'new)
+                        (agent-shell-prefer-viewport-interaction nil))
+                    (agent-shell-new-shell)))
+                (setq shell
+                      (seq-find (lambda (buffer)
+                                  (and (not (memq buffer before))
+                                       (file-equal-p
+                                        directory
+                                        (buffer-local-value 'default-directory buffer))))
+                                (agent-shell-buffers))))
+              (when shell
+                (funcall display shell nil)))))
+      (quit (message "Agent shell cancelled; the Anki problem is ready"))
+      (error (message "Agent shell unavailable; the Anki problem is ready: %s"
+                      (error-message-string err))))))
+
 (aio-defun leetcode-anki--open-card (card)
   "Prepare CARD in Emacs and associate the resulting buffer with its review."
   (unless (integerp (alist-get 'cardId card))
@@ -171,6 +246,7 @@ Signal errors explicitly; never silently treat API errors as empty decks."
                       (lambda (problem result)
                         (leetcode-anki--submission-result session problem result))
                       nil t))
+          (leetcode-anki--setup-agent-shell buffer)
           (message "Anki problem ready: %s; submit or M-x leetcode-anki-rate" slug)
           buffer)
       (error

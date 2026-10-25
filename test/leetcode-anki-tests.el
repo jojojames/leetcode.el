@@ -25,6 +25,7 @@
                       :card-id 123 :slug "two-sum" :buffer (current-buffer)
                       :deck (alist-get 'deckName card) :state 'solving))
             (leetcode-anki--active session)
+            (leetcode-anki-agent-shell-config nil)
             (leetcode-anki--selected-deck "LeetCode::NeetCode150")
             (actions nil) (answers nil) (answer-result t) (answer-error nil))
        (setq-local leetcode-anki--session session)
@@ -125,6 +126,7 @@
 (ert-deftest leetcode-anki-start-prompts-for-deck-and-resumes-without-reset ()
   (save-window-excursion
     (let ((leetcode-anki-deck nil) (leetcode-anki--active nil)
+          (leetcode-anki-agent-shell-config nil)
           (leetcode-anki--selected-deck nil)
           (buffer (generate-new-buffer " *leetcode-anki-start-test*"))
           (card (leetcode-anki-test--card))
