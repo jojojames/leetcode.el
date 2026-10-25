@@ -189,7 +189,8 @@ Anki has already advanced its queue; this opens that next card."
       (user-error "A LeetCode Anki problem is still loading"))
     (let ((card (leetcode-anki--current-card)))
       (if (null card)
-          (message "No Anki cards ready in %s" leetcode-anki--selected-deck)
+          (message "No Anki cards ready in %s; M-x leetcode-anki-next-force for another new problem"
+                   leetcode-anki--selected-deck)
         (let ((deck (alist-get 'deckName card)))
           (unless (or (equal deck leetcode-anki--selected-deck)
                       (string-prefix-p (concat leetcode-anki--selected-deck "::") deck))
@@ -204,6 +205,42 @@ Anki has already advanced its queue; this opens that next card."
                (leetcode-anki--session-buffer leetcode-anki--active))
               (message "Current Anki attempt resumed; rate recall before advancing"))
           (leetcode-anki--observe (leetcode-anki--open-card card)))))))
+
+;;;###autoload
+(defun leetcode-anki-next-force (&optional count)
+  "Open another problem, extending today's new-card allowance if needed.
+Add COUNT new cards to today's allowance (default 1, or a prefix argument).
+Keep the deck's permanent daily limit and native card ordering unchanged.
+Requires the bundled Anki add-on's AnkiConnect bridge.  An available card
+or unfinished attempt is handled by `leetcode-anki-next' without extending
+the allowance.  An uncertain rating must be resolved before continuing."
+  (interactive "p")
+  (setq count (or count 1))
+  (unless (and (integerp count) (> count 0))
+    (user-error "The number of extra problems must be a positive integer"))
+  (when (and leetcode-anki--active
+             (memq (leetcode-anki--session-state leetcode-anki--active)
+                   '(loading rating uncertain)))
+    (user-error "The current Anki attempt is loading or its rating is awaiting confirmation"))
+  (unless leetcode-anki--selected-deck
+    (let ((deck (leetcode-anki--choose-deck)))
+      (leetcode-anki--require-success "guiDeckReview" `((name . ,deck)))
+      (setq leetcode-anki--selected-deck deck)))
+  (cond
+   ((leetcode-anki--current-card) (leetcode-anki-next))
+   ((and leetcode-anki--active
+         (eq (leetcode-anki--session-state leetcode-anki--active) 'solving))
+    (user-error "The unfinished attempt lost its Anki card; resolve it before forcing another"))
+   ((eq t (condition-case err
+              (leetcode-anki--request
+               "leetcodeExtendNewCards"
+               `((deck . ,leetcode-anki--selected-deck) (count . ,count)))
+            (error
+             (if (string-match-p "unsupported action" (error-message-string err))
+                 (user-error "Force-next requires the updated bundled Anki add-on; install it and restart Anki")
+               (signal (car err) (cdr err))))))
+    (leetcode-anki-next))
+   (t (message "No unstudied problems available in %s" leetcode-anki--selected-deck))))
 
 ;;;###autoload
 (defun leetcode-anki-start (&optional deck)
