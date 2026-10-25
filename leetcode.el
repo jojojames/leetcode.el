@@ -1793,23 +1793,7 @@ It will restore the layout based on current buffer's name."
   :group 'leetcode
   :keymap leetcode--problems-mode-map)
 
-(defun leetcode--set-evil-local-map (map)
-  "Set `evil-normal-state-local-map' to MAP."
-  (when (featurep 'evil)
-    (define-key map "h" nil)
-    (define-key map "v" nil)
-    (define-key map "V" nil)
-    (define-key map "b" nil)
-    (define-key map "B" nil)
-    (define-key map "g" nil)
-    (define-key map "G" nil)
-    (define-key map "z" #'leetcode-refresh)
-    (define-key map "Z" #'leetcode-refresh-fetch)
-    (setq evil-normal-state-local-map map)))
-
 (add-hook 'leetcode--problems-mode-hook #'hl-line-mode)
-(add-hook 'leetcode--problems-mode-hook
-          (lambda () (leetcode--set-evil-local-map leetcode--problems-mode-map)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Detail Mode ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -1826,8 +1810,32 @@ It will restore the layout based on current buffer's name."
   :group 'leetcode
   :keymap leetcode--problem-detail-mode-map)
 
-(add-hook 'leetcode--problem-detail-mode-hook
-          (lambda () (leetcode--set-evil-local-map leetcode--problem-detail-mode-map)))
+(declare-function evil-define-key* "evil-core")
+
+(with-eval-after-load 'evil
+  (evil-define-key* 'normal leetcode--problems-mode-map
+    (kbd "RET") #'leetcode-show-current-problem
+    (kbd "TAB") #'leetcode-view-current-problem
+    "o" #'leetcode-show-current-problem
+    "O" #'leetcode-show-problem
+    "c" #'leetcode-solve-current-problem
+    "C" #'leetcode-solve-problem
+    "gb" #'leetcode-show-current-problem-in-browser
+    "gB" #'leetcode-show-problem-in-browser
+    "gr" #'leetcode-refresh
+    "gR" #'leetcode-refresh-fetch
+    "z" #'leetcode-refresh
+    "Z" #'leetcode-refresh-fetch
+    "s" #'leetcode-set-filter-regex
+    "L" #'leetcode-set-prefer-language
+    "t" #'leetcode-set-filter-tag
+    "T" #'leetcode-toggle-tag-display
+    "P" #'leetcode-toggle-paid-display
+    "d" #'leetcode-set-filter-difficulty
+    "r" #'leetcode-reset-filter-and-refresh
+    "q" #'quit-window)
+  (evil-define-key* 'normal leetcode--problem-detail-mode-map
+    "q" #'quit-window))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Solution Mode ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
