@@ -15,7 +15,7 @@ This guide describes the working setup used to develop this integration:
 | Emacs | 31, Evil, and `use-package` with `:vc` |
 | Client fork | https://github.com/jojojames/leetcode.el |
 | Language | Python 3 (`python3`) |
-| Solution directory | `~/leetcode` |
+| Solution directory | `~/Code/leetcode` |
 | Problem workspaces | New named Emacs tab per problem |
 | Tests | Remote LeetCode tests after manual saves |
 | Anki | macOS Anki 2.1.33 with its Python v2 scheduler |
@@ -42,7 +42,7 @@ load its companion without requesting a separate archive package:
   :demand t
   :custom
   (leetcode-prefer-language "python3")
-  (leetcode-directory "~/leetcode")
+  (leetcode-directory "~/Code/leetcode")
   (leetcode-save-solutions t)
   (leetcode-run-on-save t)
   (leetcode-open-problem-in-new-tab t))
@@ -53,7 +53,8 @@ load its companion without requesting a separate archive package:
   :demand t
   :custom
   (leetcode-anki-deck "LeetCode::NeetCode150")
-  (leetcode-anki-directory "~/Code/leetcode-neetcode-anki"))
+  (leetcode-anki-directory "~/Code/leetcode-neetcode-anki")
+  (leetcode-anki-agent-shell-config 'same))
 ```
 
 Solution buffers disable ordinary autosave and `auto-save-visited-mode`.
@@ -154,14 +155,16 @@ the override. Graduated review scheduling, other decks, and filtered-deck
 reviews retain native behavior.
 
 Without this add-on, `leetcode-anki.el` still works and uses Anki's native
-intervals throughout. Disable the add-on in Anki and restart to remove the
-override. Existing due dates stay as previously scheduled.
+intervals throughout, except that force-next requires its API bridge.
+Set the add-on's `days` configuration to `{}` to keep the bridge while
+using native intervals throughout. Disable the add-on in Anki and restart
+to remove both features. Existing due dates stay as previously scheduled.
 
 ## Daily workflow
 
 1. Run `M-x leetcode-anki-start` to start the configured deck. Anki chooses
    the card and Emacs creates its problem workspace in a new tab.
-2. Edit the file in `~/leetcode`. Save to run examples, or use `C-c C-t`.
+2. Edit the file in `~/Code/leetcode`. Save to run examples, or use `C-c C-t`.
    These tests run on LeetCode, not in a local Python test runner.
 3. Submit with `C-c C-s`. After the final Accepted verdict, Emacs prompts
    for recall with Anki's actual interval choices. Acceptance does not
@@ -173,12 +176,58 @@ override. Existing due dates stay as previously scheduled.
    During an unfinished attempt, this resumes the existing solution tab
    without resetting code.
 
+Solution files include the local date, for example
+`746_min-cost-climbing-stairs_2026-10-24.py`. A review on another day opens
+a separate file, preserving previous days' solutions. Same-day attempts
+reuse the same file; URL setup still preserves replaced code in an attempt
+buffer until you explicitly save or discard that buffer.
+
+When Anki reports no cards ready because you reached today's new-card
+limit, run **`M-x leetcode-anki-next-force`** to unlock one extra new
+problem. With `C-u 3 M-x leetcode-anki-next-force`, unlock three instead.
+This uses the same scheduler operation as Anki's Custom Study action to
+increase today's new-card allowance, including parent/subdeck limits.
+The permanent daily preset stays at one, tomorrow's allowance is unchanged,
+and Anki still selects the next problem. No card is created or rated by
+this command. It introduces existing, unstudied cards from the imported deck.
+
+An available card or unfinished attempt is opened/resumed normally without
+raising the allowance. Loading or uncertain ratings must be resolved first.
+If there are no unstudied cards left, the command reports that without
+extending the allowance. Force-next does not pull future reviews forward
+or raise the review-card daily limit. Update the installed add-on copy and
+restart Anki if the command reports an unsupported API action.
+
 Saving, testing, revealing the answer, and failed submissions never rate
 a card. Only an explicit rating advances its review. The integration
 checks both the Anki card ID and the solution attempt identity, and prevents
 repeated submissions from rating the same attempt twice. If a rating loses
 its API connection, its outcome is uncertain and it is not automatically
 retried; check Anki before starting another attempt.
+
+## Agent shell alongside a problem
+
+`leetcode-anki-agent-shell-config` controls the optional integration when a
+new problem workspace opens. Install `agent-shell` in Emacs and configure
+the agents you want to use. The default is `same`:
+
+| Value | Behavior |
+| --- | --- |
+| `same` | Reuse the most recently visited shell whose working directory matches the solution directory; start one if none exists |
+| `new` | Start a new shell for every problem |
+| `nil` | Disable the integration |
+
+Matching uses the solution's directory (`~/Code/leetcode` in this setup),
+including equivalent symlink paths. A shell from `~/.emacs.d` or another
+project is not reused. New shells use `agent-shell-new-shell`, with the
+solution directory as their working directory and a fresh session. Agent
+selection follows that command's preferred-agent/selection behavior.
+
+The workspace keeps code above the agent shell on the left, with the
+description, test inputs, and results on the right. Focus stays in the code
+buffer. No question, solution, or prompt is sent automatically. Startup
+failure or cancellation leaves the Anki problem usable. Resuming an
+unfinished attempt does not start another shell.
 
 ## View the current card in Emacs
 
@@ -207,4 +256,5 @@ The Evil bindings are installed by `leetcode-anki.el` using
   buffer-local `leetcode-submission-result-hook`, which runs after the
   final verdict in the originating solution buffer.
 - `anki/leetcode_intervals` contains the optional Anki-side scheduling
-  override. Installing it is independent of loading the Emacs code.
+  override and the `leetcodeExtendNewCards` AnkiConnect bridge used by
+  force-next. Installing it is independent of loading the Emacs code.

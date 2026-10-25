@@ -121,7 +121,9 @@ If you prefer not to see problems' tags in the `*leetcode**`buffer by default. s
 All supported languages can be found in variable `leetcode--lang-suffixes`.
 
 Solution buffers visit files in `leetcode-directory` by default. Save with
-`C-x C-s`; files are named `<problem-id>_<problem-slug>.<extension>`.
+`C-x C-s`; files are named `<problem-id>_<problem-slug>_YYYY-MM-DD.<extension>`.
+The date uses your local timezone. Reviews on different days keep separate
+files; attempts on the same day reuse that day's file.
 The directory and any missing parents are created automatically. Customize
 the location, or set `leetcode-save-solutions` to nil for scratch buffers:
 
