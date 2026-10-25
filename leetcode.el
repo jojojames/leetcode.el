@@ -1823,7 +1823,8 @@ It will restore the layout based on current buffer's name."
   special-mode "LC Detail"
   "Major mode for display problem detail."
   :group 'leetcode
-  :keymap leetcode--problem-detail-mode-map)
+  :keymap leetcode--problem-detail-mode-map
+  (visual-line-mode 1))
 
 (declare-function evil-define-key* "evil-core")
 
