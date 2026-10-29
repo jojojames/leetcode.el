@@ -104,7 +104,8 @@ preset named **LeetCode NeetCode150** with:
 | Option | Value |
 | --- | --- |
 | New cards/day | 1 |
-| Maximum reviews/day | 200 |
+| Maximum reviews/day | 3 |
+| Maximum interval | 100 days |
 | Learning steps | 1 minute, 10 minutes |
 | Relearning steps after Again | 1 minute |
 | Starting ease | 250% |
@@ -140,27 +141,34 @@ Anki's add-on configuration dialog. The defaults in
 [config.json](leetcode_intervals/config.json) select
 `LeetCode::NeetCode150` and all its topic subdecks:
 
-| Rating while learning or relearning | Next review |
+| Initial rating | Next review |
 | --- | --- |
 | Again | Native retry step, about 1 minute with our preset |
-| Hard | 2 days |
-| Good | 5 days |
-| Easy | 10 days |
+| Hard | 3 days |
+| Good | 4 days |
+| Easy | 5 days |
 
-Hard, Good, or Easy moves the problem into Anki's graduated review queue.
-**Subsequent reviews use Anki's native growing intervals**, based on the
-card's history and rating. Easy does not mean reviewing every ten days
-forever. A lapse returns the card to native relearning, whose next
-successful rating uses the starting delays above again.
+Hard, Good, or Easy graduates a new problem into the review queue.
+Subsequent reviews use this interval ladder (days between appearances):
 
-The add-on changes native learning answer states before displaying or
+**3 → 4 → 5 → 7 → 10 → 14 → 18 → 24 → 30 → 40 → 50 → 65 → 80 → 100**
+
+Hard holds the current interval, bounded by 3 and 100 days. Good chooses
+one strictly greater step; Easy chooses two, stopping at the maximum.
+Existing off-ladder intervals advance to the next greater steps. Late
+reviews use the scheduled interval without a lateness bonus. Again uses
+native relearning; the next successful rating restarts at 3 days.
+Existing due dates remain unchanged until a card is next rated.
+
+The add-on changes native passing answer states before displaying or
 recording them, so Anki, Emacs, and review history agree on the interval.
-It keeps each rating's own predicted FSRS memory state, lapse count, ease,
-and native undo. Graduated review states are unchanged, allowing the
-scheduler to keep growing intervals. Other decks and filtered-deck reviews
-retain native behavior. On the older 2.1.33 scheduler, a compatibility path
-records the native rating and explicitly reschedules the card; only that
-legacy path retains the original native interval in review history.
+It keeps each rating's predicted FSRS memory state, lapse count, ease,
+and native undo. Native ease multipliers do not control ladder intervals.
+Other decks and ordinary filtered decks retain native scheduling; the
+add-on's LeetCode Random deck uses the same ladder. On the older 2.1.33
+scheduler, a compatibility path records the native rating and explicitly
+reschedules the card; that legacy path retains the original native
+interval in review history.
 
 Without this add-on, `leetcode-anki.el` still works and uses Anki's native
 intervals throughout, except that force-next requires its API bridge.

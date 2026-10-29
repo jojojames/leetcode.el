@@ -1,4 +1,4 @@
-"""Longer learning intervals for legacy and current Anki schedulers.
+"""Stepwise LeetCode intervals for legacy and current Anki schedulers.
 
 Install this directory in Anki's addons21 directory and restart Anki.
 The native reviewer and AnkiConnect share these interval previews and
@@ -12,10 +12,8 @@ from aqt import mw
 
 
 def interval_days(scheduler, card, ease, allow_filtered=False):
-    """Return a learning interval, or None for native review scheduling."""
-    # New, learning, and day-learning cards get problem-sized starting
-    # delays. Graduated reviews retain Anki's growing intervals.
-    if card.queue not in (0, 1, 3):
+    """Return a configured interval, or None for native scheduling."""
+    if ease not in (2, 3, 4) or card.queue not in (0, 1, 2, 3):
         return None
     config = mw.addonManager.getConfig(__name__) or {}
     root = config.get("deck", "LeetCode::NeetCode150")
@@ -28,7 +26,28 @@ def interval_days(scheduler, card, ease, allow_filtered=False):
     # Filtered decks can have different button meanings; leave them native.
     if original and not allow_filtered:
         return None
-    days = config.get("days", {"2": 2, "3": 5, "4": 10}).get(str(ease))
+    starts = config.get("days", {"2": 3, "3": 4, "4": 5})
+    if not starts:
+        return None
+    ladder = config.get("intervals", [3, 4, 5, 7, 10, 14, 18, 24, 30, 40, 50, 65, 80, 100])
+    if (not isinstance(ladder, list) or not ladder
+            or any(type(day) is not int or day < 1 for day in ladder)
+            or any(a >= b for a, b in zip(ladder, ladder[1:]))):
+        raise ValueError("LeetCode intervals must be strictly increasing positive whole days")
+    card_type = getattr(card, "type", 0)
+    if card_type == 3:
+        # A successful relearning answer restarts at the first step.
+        days = ladder[0]
+    elif card.queue == 2:
+        current_interval = getattr(card, "interval", getattr(card, "ivl", 0))
+        if ease == 2:
+            days = min(max(current_interval, ladder[0]), ladder[-1])
+        else:
+            later = [day for day in ladder if day > current_interval]
+            advance = 1 if ease == 3 else 2
+            days = later[min(advance, len(later)) - 1] if later else ladder[-1]
+    else:
+        days = starts.get(str(ease))
     if days is not None and (type(days) is not int or days < 1):
         raise ValueError("LeetCode review intervals must be positive whole days")
     return days
@@ -75,7 +94,7 @@ def install(scheduler_class):
 
 
 def customize_states(scheduler, card, states, allow_filtered=False):
-    """Override only learning transitions in current Anki's native states.
+    """Override passing intervals in current Anki's native states.
 
     The backend records the selected state directly, so previews, due dates,
     undo, review history, and FSRS memory remain part of the native answer.
@@ -106,8 +125,6 @@ def customize_states(scheduler, card, states, allow_filtered=False):
                 getattr(states, name).filtered.rescheduling.original_state.CopyFrom(normal)
         return
     if not states.current.HasField("normal"):
-        return
-    if states.current.normal.WhichOneof("kind") == "review":
         return
     # Easy supplies a native graduation template, including starting ease.
     if not states.easy.normal.HasField("review"):

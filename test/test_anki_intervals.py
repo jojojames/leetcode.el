@@ -30,7 +30,7 @@ class IntervalTests(unittest.TestCase):
         self.scheduler.col = types.SimpleNamespace(
             decks=types.SimpleNamespace(get=lambda _: {"name": self.deck}))
         self.config = {"deck": "LeetCode::NeetCode150",
-                       "days": {"2": 2, "3": 5, "4": 10}}
+                       "days": {"2": 3, "3": 4, "4": 5}}
         manager = types.SimpleNamespace(getConfig=lambda _: self.config)
         modules = {
             "aqt": types.SimpleNamespace(mw=types.SimpleNamespace(addonManager=manager)),
@@ -44,14 +44,14 @@ class IntervalTests(unittest.TestCase):
 
     @staticmethod
     def card(queue):
-        card = types.SimpleNamespace(id=123, did=1, odid=0, factor=2350, queue=queue)
+        card = types.SimpleNamespace(id=123, did=1, odid=0, factor=2350, queue=queue, type=2 if queue == 2 else 0, ivl=5)
         card.load = lambda: setattr(card, "factor", 2500)
         card.flush = lambda: setattr(card, "flushed", True)
         return card
 
     def test_learning_delays_and_ease_survive_graduation(self):
         for queue in (0, 1, 3):
-            for ease, days in ((2, 2), (3, 5), (4, 10)):
+            for ease, days in ((2, 3), (3, 4), (4, 5)):
                 with self.subTest(queue=queue, ease=ease):
                     card = self.card(queue)
                     self.assertEqual(self.scheduler.nextIvl(card, ease), days * 86400)
@@ -61,13 +61,36 @@ class IntervalTests(unittest.TestCase):
                     self.assertTrue(self.scheduler.reset_called)
         self.assertEqual(self.scheduler.native_calls, 9)
 
-    def test_graduated_reviews_grow_natively(self):
-        for ease in (1, 2, 3, 4):
+    def test_graduated_reviews_follow_ladder(self):
+        for ease, days in ((2, 5), (3, 7), (4, 10)):
             card = self.card(2)
-            self.assertEqual(self.scheduler.nextIvl(card, ease), 25 * 86400)
+            self.assertEqual(self.scheduler.nextIvl(card, ease), days * 86400)
             self.scheduler.answerCard(card, ease)
-        self.assertFalse(hasattr(self.scheduler, "rescheduled"))
-        self.assertEqual(self.scheduler.native_calls, 4)
+            self.assertEqual(self.scheduler.rescheduled, ([123], days, days))
+
+    def test_cap_off_ladder_and_relearning(self):
+        for interval, expected in ((100, [100, 100, 100]),
+                                   (13, [13, 14, 18]),
+                                   (150, [100, 100, 100])):
+            card = self.card(2)
+            card.ivl = interval
+            self.assertEqual([self.addon.interval_days(self.scheduler, card, e)
+                              for e in (2, 3, 4)], expected)
+        card = self.card(1)
+        card.type = 3
+        self.assertEqual([self.addon.interval_days(self.scheduler, card, e)
+                          for e in (2, 3, 4)], [3, 3, 3])
+
+    def test_invalid_ladder_rejected_before_rating(self):
+        for ladder in ([], [3, 3], [5, 3], [0, 3], [3, True]):
+            self.config['intervals'] = ladder
+            with self.assertRaises(ValueError):
+                self.scheduler.answerCard(self.card(2), 3)
+        self.assertEqual(self.scheduler.native_calls, 0)
+
+    def test_empty_days_disables_ladder(self):
+        self.config['days'] = {}
+        self.assertIsNone(self.addon.interval_days(self.scheduler, self.card(2), 3))
 
     def test_again_other_decks_and_filtered_decks_stay_native(self):
         card = self.card(1)

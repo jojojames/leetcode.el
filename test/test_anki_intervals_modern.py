@@ -27,7 +27,7 @@ class ModernIntervalTests(unittest.TestCase):
     def setUpClass(cls):
         cls.native_queue = staticmethod(Scheduler.get_queued_cards)
         cls.config = {"deck": "LeetCode::NeetCode150",
-                      "days": {"2": 2, "3": 5, "4": 10}}
+                      "days": {"2": 3, "3": 4, "4": 5}}
         manager = types.SimpleNamespace(getConfig=lambda _: cls.config)
         fake_aqt = types.SimpleNamespace(mw=types.SimpleNamespace(addonManager=manager))
         path = Path(__file__).resolve().parents[1] / "anki/leetcode_intervals/__init__.py"
@@ -60,11 +60,11 @@ class ModernIntervalTests(unittest.TestCase):
         return self.col.get_card(card.id)
 
     def test_initial_delays_are_saved_in_due_dates_and_history(self):
-        for rating, days in ((CardAnswer.HARD, 2), (CardAnswer.GOOD, 5), (CardAnswer.EASY, 10)):
+        for rating, days in ((CardAnswer.HARD, 3), (CardAnswer.GOOD, 4), (CardAnswer.EASY, 5)):
             with self.subTest(days=days):
                 self.add_card()
                 queued = self.col.sched.get_queued_cards().cards[0]
-                expected = [2, 5, 10]
+                expected = [3, 4, 5]
                 actual = [getattr(queued.states, name).normal.review.scheduled_days
                           for name in ("hard", "good", "easy")]
                 self.assertEqual(actual, expected)
@@ -75,17 +75,27 @@ class ModernIntervalTests(unittest.TestCase):
                 self.assertEqual(self.col.db.scalar(
                     "select ivl from revlog where cid=? order by id desc limit 1", card.id), days)
 
-    def test_again_is_native_and_graduated_intervals_keep_growing(self):
+    def test_again_is_native_and_graduated_intervals_follow_ladder(self):
         cid = self.add_card()
         native = self.native_queue(self.col.sched).cards[0].states
         queued = self.col.sched.get_queued_cards().cards[0]
         self.assertEqual(queued.states.again, native.again)
-        self.answer(queued, CardAnswer.EASY)
-        self.col.sched.set_due_date([cid], "0")
+        card = self.answer(queued, CardAnswer.EASY)
+        card.due = self.col.sched.today
+        card.ivl = 5
+        self.col.update_card(card)
         native = self.native_queue(self.col.sched).cards[0].states
         queued = self.col.sched.get_queued_cards().cards[0]
-        self.assertEqual(queued.states, native)
-        self.assertGreater(queued.states.good.normal.review.scheduled_days, 10)
+        self.assertEqual(queued.states.again, native.again)
+        self.assertEqual([getattr(queued.states, name).normal.review.scheduled_days
+                          for name in ('hard', 'good', 'easy')], [5, 7, 10])
+        card = self.answer(queued, CardAnswer.GOOD)
+        self.assertEqual(card.ivl, 7)
+        self.assertEqual(card.due, self.col.sched.today + 7)
+        self.assertEqual(self.col.db.scalar(
+            'select ivl from revlog where cid=? order by id desc limit 1', cid), 7)
+        self.col.undo()
+        self.assertEqual(self.col.get_card(cid).ivl, 5)
 
     def test_other_decks_are_unchanged(self):
         self.did = self.col.decks.id("Vietnamese")
@@ -107,11 +117,11 @@ class ModernIntervalTests(unittest.TestCase):
             self.assertTrue(memory.stability > 0)
             self.assertEqual(getattr(queued.states, name).normal.review.memory_state, memory)
         card = self.answer(queued, CardAnswer.GOOD)
-        self.assertEqual(card.ivl, 5)
+        self.assertEqual(card.ivl, 4)
         self.assertIsNotNone(card.memory_state)
 
     def test_random_review_uses_home_intervals_and_returns_to_home_deck(self):
-        for rating, days in ((CardAnswer.HARD, 2), (CardAnswer.GOOD, 5), (CardAnswer.EASY, 10)):
+        for rating, days in ((CardAnswer.HARD, 3), (CardAnswer.GOOD, 4), (CardAnswer.EASY, 5)):
             with self.subTest(days=days):
                 cid = self.add_card()
                 api = types.SimpleNamespace(collection=lambda: self.col)
@@ -122,7 +132,7 @@ class ModernIntervalTests(unittest.TestCase):
                 self.assertEqual(queued.card.id, cid)
                 self.assertEqual(queued.states.current.WhichOneof("kind"), "filtered")
                 self.assertEqual([getattr(queued.states, key).normal.review.scheduled_days
-                                  for key in ("hard", "good", "easy")], [2, 5, 10])
+                                  for key in ("hard", "good", "easy")], [3, 4, 5])
                 card = self.answer(queued, rating)
                 self.assertEqual(card.did, self.did)
                 self.assertEqual(card.odid, 0)
@@ -266,7 +276,7 @@ class ModernIntervalTests(unittest.TestCase):
             self.assertEqual(actual.ease_factor, review.ease_factor)
             self.assertEqual(actual.lapses, review.lapses)
         saved = self.answer(queued, CardAnswer.HARD)
-        self.assertEqual(saved.ivl, 2)
+        self.assertEqual(saved.ivl, 3)
         self.assertGreater(saved.lapses, 0)
 
 
