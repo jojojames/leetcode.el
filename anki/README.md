@@ -176,6 +176,69 @@ Set the add-on's `days` configuration to `{}` to keep the bridge while
 using native intervals throughout. Disable the add-on in Anki and restart
 to remove both features. Existing due dates stay as previously scheduled.
 
+### Updating intervals with Codex
+
+Make scheduling changes in this Git repository first, then install the
+updated add-on into Anki. The installed `addons21/leetcode_intervals/`
+directory is a runtime copy, not a Git checkout. Editing only that copy
+leaves changes untracked and a later installation can overwrite them.
+
+The source files are:
+
+- [config.json](leetcode_intervals/config.json): starting delays (`days`,
+  where `2` = Hard, `3` = Good, and `4` = Easy), plus any interval ladder
+  supported by the implementation.
+- [__init__.py](leetcode_intervals/__init__.py): scheduling rules, including
+  whether graduated reviews use native growth or a custom ladder.
+- [config.md](leetcode_intervals/config.md): configuration help displayed
+  by Anki. Keep this and the scheduling description above in sync.
+
+Changing starting delays alone does not change graduated review growth.
+A custom ladder requires Python support as well as configuration. Do not
+assume that adding an `intervals` key to an older add-on enables it.
+
+For example, open this repository in Codex and ask:
+
+> Update the Anki add-on source under `anki/leetcode_intervals`. Use initial
+> Hard/Good/Easy delays of 3/4/5 days and the interval ladder
+> 3, 4, 5, 7, 10, 14, 18, 24, 30, 40, 50, 65, 80, 100 days. For graduated
+> reviews, Hard holds the current interval, Good advances to the next
+> greater step, and Easy advances to the second greater step, capped at
+> 100 days. Again uses native relearning, then a successful relearning
+> answer restarts at 3 days. Handle existing off-ladder intervals and
+> preserve other decks, native undo, and the AnkiConnect bridges. Update
+> the scheduling tests, configuration help, and README; run the tests.
+> Compare the installed copy before replacing it so local changes are
+> preserved. Install the tested source and tell me to restart Anki.
+> Set the NeetCode150 preset to 3 reviews/day, 1 new/day, and a 100-day
+> maximum using Anki's supported interface. Preserve unrelated Git changes
+> and show me the diff before committing.
+
+After reviewing and testing source changes, copy the three source files
+into the installed directory:
+
+```sh
+cp anki/leetcode_intervals/{__init__.py,config.json,config.md} \
+  "$HOME/Library/Application Support/Anki2/addons21/leetcode_intervals/"
+```
+
+Restart Anki to load Python changes. Check the effective configuration in
+**Tools → Add-ons → select the add-on → Config**: Anki can retain user
+configuration separately from `config.json`, so update saved overrides to
+match. Confirm the interval labels on the next due card in Anki or Emacs
+without rating a card merely to test it. Existing due dates are preserved;
+new intervals apply when cards are next rated.
+
+Daily limits and Anki's native maximum interval live in the deck preset,
+not these source files. Set them in the deck's **Options** (or through its
+supported API); committing the add-on does not save those database settings.
+Same-day learning retries can exceed the review-card limit. A low daily
+limit defers excess due cards rather than changing their scheduled dates.
+
+Review `git diff` and commit the relevant source, tests, and documentation
+in this repository. Keep unrelated changes out of the commit. The installed
+Anki copy does not need its own Git repository.
+
 ## Daily workflow
 
 1. Run `M-x leetcode-anki-start` to start the configured deck. Anki chooses
