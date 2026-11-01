@@ -74,7 +74,7 @@
                  (setq opened t)
                  (let ((promise (aio-promise)))
                    (aio-resolve promise (lambda () t)) promise))))
-      (aio-wait-for (leetcode-anki-random))
+      (aio-wait-for (leetcode-anki-next-force-random))
       (should opened)
       (should (equal actions '("leetcodeReviewRandomCard"))))))
 
@@ -84,7 +84,7 @@
     (cl-letf (((symbol-function 'leetcode-anki--request)
                (lambda (&rest _) (ert-fail "Must not replace an unfinished review")))
               ((symbol-function 'leetcode-anki-next) (lambda () (setq resumed t))))
-      (leetcode-anki-random-force)
+      (leetcode-anki-next-force-random)
       (should resumed))))
 
 (ert-deftest leetcode-anki-random-review-reopens-its-own-reviewer-before-rating ()

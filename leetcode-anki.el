@@ -308,7 +308,7 @@ Only read Anki data; do not enter its reviewer or modify scheduling."
       (nth (random (length problems)) problems))))
 
 ;;;###autoload
-(defun leetcode-anki-random-force (&optional deck)
+(defun leetcode-anki-next-force-random (&optional deck)
   "Force a new Anki problem from a random topic within DECK.
 Like `leetcode-anki-next-force', extend today's allowance and schedule the
 problem through normal recall ratings, but choose a random unstudied card
@@ -341,9 +341,6 @@ Resume an unfinished attempt rather than replacing its code."
       (unless leetcode-anki--selected-deck
         (setq leetcode-anki--selected-deck scope))
       (leetcode-anki--observe (leetcode-anki--open-card selected))))))
-
-;;;###autoload
-(defalias 'leetcode-anki-random #'leetcode-anki-random-force)
 
 (defun leetcode-anki--wait-for-current-card ()
   "Read the reviewer after any outstanding collection operation finishes.
