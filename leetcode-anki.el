@@ -154,7 +154,12 @@ Signal errors explicitly; never silently treat API errors as empty decks."
                (eq (buffer-local-value 'leetcode-anki--session
                                        (leetcode-anki--session-buffer session)) session))
     (user-error "This Anki review is already rated, inactive, or awaiting confirmation"))
-  (let ((card (leetcode-anki--next-card (leetcode-anki--session-deck session))))
+  ;; A session's deck is its card's own deck.  Only a random session owns
+  ;; that reviewer; an ordinary card sits in a topic subdeck, and reopening
+  ;; there would narrow the selected deck's queue to that one topic.
+  (let ((card (leetcode-anki--next-card
+               (and (leetcode-anki--random-session-p session)
+                    (leetcode-anki--session-deck session)))))
     (unless (and card
                  (equal (alist-get 'cardId card) (leetcode-anki--session-card-id session))
                  (equal (alist-get 'deckName card) (leetcode-anki--session-deck session))
