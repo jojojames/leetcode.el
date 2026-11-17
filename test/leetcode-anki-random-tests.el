@@ -98,3 +98,23 @@
                  (should (equal (alist-get 'name params) "LeetCode Random"))
                  (setq ready t))))
       (should (equal (leetcode-anki--next-card "LeetCode Random") card)))))
+
+(ert-deftest leetcode-anki-random-rating-recovers-the-random-reviewer ()
+  (with-temp-buffer
+    (let* ((card '((cardId . 456) (deckName . "LeetCode Random")
+                   (fields (slug (value . "two-sum")))))
+           (session (leetcode-anki--make-session
+                     :card-id 456 :slug "two-sum" :deck "LeetCode Random"
+                     :buffer (current-buffer) :state 'solving))
+           (leetcode-anki--active session)
+           (leetcode-anki--selected-deck "LeetCode::NeetCode150")
+           (ready nil) (opened nil))
+      (setq-local leetcode-anki--session session)
+      (cl-letf (((symbol-function 'leetcode-anki--current-card) (lambda () (and ready card)))
+                ((symbol-function 'leetcode-anki--require-success)
+                 (lambda (action &optional params)
+                   (should (equal action "guiDeckReview"))
+                   (push (alist-get 'name params) opened)
+                   (setq ready t))))
+        (should (equal (leetcode-anki--verify session) card))
+        (should (equal opened '("LeetCode Random")))))))

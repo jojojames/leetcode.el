@@ -58,6 +58,23 @@
         (should (= opened 1))
         (should (equal answers '(3)))))))
 
+(ert-deftest leetcode-anki-rating-reopens-selected-deck-not-card-subdeck ()
+  ;; The card lives in a topic subdeck.  Recovering an inactive reviewer on
+  ;; that subdeck would narrow Anki's queue to one topic for later cards.
+  (leetcode-anki-test--with-review
+    (let ((active nil) (opened nil))
+      (cl-letf (((symbol-function 'leetcode-anki--current-card)
+                 (lambda () (and active card)))
+                ((symbol-function 'leetcode-anki--require-success)
+                 (lambda (action &optional params)
+                   (when (equal action "guiDeckReview")
+                     (push (alist-get 'name params) opened)
+                     (setq active t))
+                   t)))
+        (should (leetcode-anki-rate 3))
+        (should (equal opened '("LeetCode::NeetCode150")))
+        (should (equal answers '(3)))))))
+
 (ert-deftest leetcode-anki-rating-rejects-different-card-after-reopening ()
   (leetcode-anki-test--with-review
     (let ((active nil))
