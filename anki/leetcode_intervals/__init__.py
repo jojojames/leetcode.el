@@ -297,7 +297,7 @@ def extend_new_cards_async(owner, deck, count, deferred_class, schedule):
 RANDOM_DECK = "LeetCode Random"
 
 
-def prepare_random_card(owner, card_id, deck):
+def prepare_random_card(owner, card_id, deck, extend=True):
     """Put one new problem in a native rescheduling filtered deck.
 
     Existing cards in the extra deck are never discarded. New-card limits
@@ -333,8 +333,9 @@ def prepare_random_card(owner, card_id, deck):
     collection.sched.add_or_update_filtered_deck(config)
     if collection.sched.rebuild_filtered_deck(did).count != 1:
         raise ValueError("Anki could not select the random review problem")
-    collection.decks.select(card.did)
-    collection.sched.extend_limits(1, 0)
+    if extend:
+        collection.decks.select(card.did)
+        collection.sched.extend_limits(1, 0)
     return RANDOM_DECK
 
 
@@ -356,7 +357,7 @@ def finish_random_card(owner, card_id):
     return True
 
 
-def review_random_card_async(owner, card_id, deck, deferred_class, schedule):
+def review_random_card_async(owner, card_id, deck, deferred_class, schedule, extend=True):
     """Open the native random review reviewer and await its exact card."""
     import time
     result = deferred_class()
@@ -380,7 +381,7 @@ def review_random_card_async(owner, card_id, deck, deferred_class, schedule):
             result.resolve(error=error)
 
     try:
-        name = prepare_random_card(owner, card_id, deck)
+        name = prepare_random_card(owner, card_id, deck, extend=extend)
         if not owner.guiDeckReview(name):
             raise ValueError("Could not open random review reviewer")
         schedule(0, wait)
@@ -399,6 +400,8 @@ def install_anki_connect():
     # Keep the public action name used by Emacs through a versioned alias.
     connector.AnkiConnect.guiLeetcodeExtendNewCards = connector.util.api(
         (6, "leetcodeExtendNewCards"))(extend_new_cards)
+    connector.AnkiConnect.guiLeetcodeResumeCard = connector.util.api(
+        (6, "leetcodeResumeCard"))(lambda self, cardId, deck: None)
     connector.AnkiConnect.guiLeetcodeFinishRandomCard = connector.util.api(
         (6, "leetcodeFinishRandomCard"))(lambda self, cardId: None)
     connector.AnkiConnect.guiLeetcodeReviewRandomCard = connector.util.api(
@@ -410,6 +413,12 @@ def install_anki_connect():
 
         @wraps(original_call)
         def call(adapter, name, params):
+            if name == "guiLeetcodeResumeCard":
+                from aqt.qt import QTimer
+                protocol = importlib.import_module(connector.__name__ + ".protocol")
+                return review_random_card_async(
+                    adapter.owner, params["cardId"], params["deck"],
+                    protocol.Deferred, QTimer.singleShot, extend=False)
             if name == "guiLeetcodeFinishRandomCard":
                 return finish_random_card(adapter.owner, params["cardId"])
             if name == "guiLeetcodeReviewRandomCard":

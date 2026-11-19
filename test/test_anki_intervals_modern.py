@@ -192,6 +192,25 @@ class ModernIntervalTests(unittest.TestCase):
         self.assertEqual(self.col.sched.get_queued_cards().cards[0].card.id, regular)
         self.assertEqual(self.col.decks.config_dict_for_deck_id(self.did)["new"]["perDay"], 1)
 
+    def test_resume_unrated_card_does_not_extend_limits_or_record_a_review(self):
+        cid = self.add_card()
+        api = types.SimpleNamespace(collection=lambda: self.col)
+        with patch.object(self.col.sched, "extend_limits", wraps=self.col.sched.extend_limits) as extend:
+            name = self.addon.prepare_random_card(api, cid, "LeetCode::NeetCode150", extend=False)
+            self.assertEqual(self.addon.prepare_random_card(api, cid, name, extend=False), name)
+            extend.assert_not_called()
+        card = self.col.get_card(cid)
+        self.assertEqual(card.reps, 0)
+        self.assertEqual(card.type, 0)
+        self.assertEqual(self.col.db.scalar("select count(*) from revlog where cid=?", cid), 0)
+        self.col.decks.select(self.col.decks.by_name(name)["id"])
+        queued = self.col.sched.get_queued_cards().cards[0]
+        self.assertEqual(queued.card.id, cid)
+        card = self.answer(queued, CardAnswer.GOOD)
+        self.assertEqual(card.did, self.did)
+        self.assertEqual(card.ivl, 4)
+        self.assertEqual(card.reps, 1)
+
     def test_random_review_preserves_existing_extra_card(self):
         api = types.SimpleNamespace(collection=lambda: self.col)
         cid = self.add_card()
