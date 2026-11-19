@@ -436,7 +436,15 @@ the allowance.  An uncertain rating must be resolved before continuing."
    ((leetcode-anki--current-card) (leetcode-anki-next))
    ((and leetcode-anki--active
          (eq (leetcode-anki--session-state leetcode-anki--active) 'solving))
-    (user-error "The unfinished attempt lost its Anki card; resolve it before forcing another"))
+    ;; Leaving Anki's reviewer (for example, opening its deck list) makes
+    ;; guiCurrentCard nil without losing the pending attempt. Reopen before
+    ;; treating the session as stale; never extend limits or rate a card here.
+    (let ((card (leetcode-anki--next-card
+                 (leetcode-anki--session-deck leetcode-anki--active))))
+      (unless (and card (equal (alist-get 'cardId card)
+                              (leetcode-anki--session-card-id leetcode-anki--active)))
+        (user-error "Anki no longer has this attempt current; run leetcode-anki-start to start a fresh session (solution files are preserved)"))
+      (leetcode-anki-next)))
    ((eq t (condition-case err
               (leetcode-anki--request
                "leetcodeExtendNewCards"

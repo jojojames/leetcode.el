@@ -259,12 +259,38 @@
 
 (ert-deftest leetcode-anki-force-next-preserves-unfinished-or-uncertain-review ()
   (leetcode-anki-test--with-review
-    (cl-letf (((symbol-function 'leetcode-anki--current-card) (lambda () nil)))
+    (cl-letf (((symbol-function 'leetcode-anki--current-card) (lambda () nil))
+              ((symbol-function 'leetcode-anki--next-card) (lambda (&optional _) nil)))
       (dolist (state '(solving loading rating uncertain))
         (setf (leetcode-anki--session-state session) state)
         (should-error (leetcode-anki-next-force) :type 'user-error)))
     (should-not actions)
     (should-not answers)))
+
+(ert-deftest leetcode-anki-force-next-reopens-an-inactive-unfinished-review ()
+  (leetcode-anki-test--with-review
+    (let ((opened 0))
+      (cl-letf (((symbol-function 'leetcode-anki--current-card) (lambda () nil))
+                ((symbol-function 'leetcode-anki--next-card)
+                 (lambda (deck)
+                   (should (equal deck (leetcode-anki--session-deck session)))
+                   card))
+                ((symbol-function 'leetcode-anki-next) (lambda () (cl-incf opened))))
+        (leetcode-anki-next-force)
+        (should (= opened 1))
+        (should (eq (leetcode-anki--session-state session) 'solving))
+        (should-not actions)
+        (should-not answers)))))
+
+(ert-deftest leetcode-anki-force-next-rejects-a-different-recovered-card ()
+  (leetcode-anki-test--with-review
+    (cl-letf (((symbol-function 'leetcode-anki--current-card) (lambda () nil))
+              ((symbol-function 'leetcode-anki--next-card)
+               (lambda (&optional _) (leetcode-anki-test--card 999))))
+      (should-error (leetcode-anki-next-force) :type 'user-error)
+      (should (eq (leetcode-anki--session-state session) 'solving))
+      (should-not actions)
+      (should-not answers))))
 
 (ert-deftest leetcode-anki-force-next-api-failure-does-not-open-or-retry ()
   (let ((leetcode-anki--active nil)
