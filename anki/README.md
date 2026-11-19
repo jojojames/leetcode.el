@@ -294,6 +294,13 @@ Again answers with their short learning delay. Other filtered decks retain
 native behavior. The command requires current Anki and the updated bundled
 add-on. No cards are rated automatically.
 
+If Anki leaves its reviewer while you work on an unstudied problem, the
+rating command can restore that exact card through the native one-card
+reviewer. Recovery never records a rating or adds another daily allowance.
+It refuses cards that were already rated elsewhere, suspended, or buried.
+Identity is checked again after the recall prompt and before answering;
+a different card appearing during the prompt is never rated automatically.
+
 Saving, testing, revealing the answer, and failed submissions never rate
 a card. Only an explicit rating advances its review. The integration
 checks both the Anki card ID and the solution attempt identity, and prevents
