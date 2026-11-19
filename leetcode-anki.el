@@ -146,7 +146,30 @@ Signal errors explicitly; never silently treat API errors as empty decks."
       (user-error "Anki card has no valid LeetCode slug field"))
     slug))
 
-(defun leetcode-anki--verify (session)
+(defun leetcode-anki--restore-unrated-card (session)
+  "Restore SESSION's exact unstudied card without extending daily limits.
+Never restore a card that was rated elsewhere, suspended, or buried."
+  (condition-case err
+      (let* ((id (leetcode-anki--session-card-id session))
+             (saved (car (leetcode-anki--request "cardsInfo" `((cards . [,id]))))))
+        (unless (and saved
+                     (equal (alist-get 'cardId saved) id)
+                     (equal (leetcode-anki--slug saved) (leetcode-anki--session-slug session))
+                     (equal (alist-get 'type saved) 0)
+                     (equal (alist-get 'queue saved) 0)
+                     (equal (alist-get 'reps saved) 0))
+          (user-error "The original Anki card is no longer an available, unrated new card; its schedule was left unchanged"))
+        (let ((card (leetcode-anki--request
+                     "leetcodeResumeCard"
+                     `((cardId . ,id) (deck . ,(leetcode-anki--session-deck session))))))
+          (unless (and card (equal (alist-get 'cardId card) id)
+                       (equal (leetcode-anki--slug card) (leetcode-anki--session-slug session)))
+            (user-error "Anki could not restore the original problem; no rating was recorded"))
+          (setf (leetcode-anki--session-deck session) (alist-get 'deckName card))
+          card))
+    (error (user-error "Could not resume the original Anki card: %s" (error-message-string err)))))
+
+(defun leetcode-anki--verify (session &optional recover)
   "Return the current Anki card if it still belongs to SESSION."
   (unless (and (eq session leetcode-anki--active)
                (eq (leetcode-anki--session-state session) 'solving)
@@ -155,6 +178,11 @@ Signal errors explicitly; never silently treat API errors as empty decks."
                                        (leetcode-anki--session-buffer session)) session))
     (user-error "This Anki review is already rated, inactive, or awaiting confirmation"))
   (let ((card (leetcode-anki--next-card (leetcode-anki--session-deck session))))
+    (when (and recover
+               (not (and card
+                         (equal (alist-get 'cardId card) (leetcode-anki--session-card-id session))
+                         (equal (leetcode-anki--slug card) (leetcode-anki--session-slug session)))))
+      (setq card (leetcode-anki--restore-unrated-card session)))
     (unless (and card
                  (equal (alist-get 'cardId card) (leetcode-anki--session-card-id session))
                  (equal (alist-get 'deckName card) (leetcode-anki--session-deck session))
@@ -495,7 +523,7 @@ Choosing Not now, or cancelling, leaves the review unrated."
   (interactive)
   (let* ((session (or leetcode-anki--session leetcode-anki--active))
          (_ (unless session (user-error "Start a review with leetcode-anki-start")))
-         (card (leetcode-anki--verify session))
+         (card (leetcode-anki--verify session t))
          (options (leetcode-anki--rating-options card))
          (answer (or ease
                      (cdr (assoc (completing-read "Recall: "

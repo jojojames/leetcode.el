@@ -320,3 +320,42 @@
 
 (provide 'leetcode-anki-tests)
 ;;; leetcode-anki-tests.el ends here
+
+(ert-deftest leetcode-anki-rating-restores-exact-unrated-card-after-reviewer-switch ()
+  (leetcode-anki-test--with-review
+    (let ((original card) (resumes 0))
+      (setq card (leetcode-anki-test--card 999))
+      (cl-letf (((symbol-function 'leetcode-anki--request)
+                 (lambda (action &optional params)
+                   (pcase action
+                     ("guiReviewActive" t)
+                     ("guiCurrentCard" card)
+                     ("cardsInfo" (list (append original '((type . 0) (queue . 0) (reps . 0)))))
+                     ("leetcodeResumeCard"
+                      (should (= (alist-get 'cardId params) 123))
+                      (cl-incf resumes)
+                      (setq card (copy-tree original))
+                      (setf (alist-get 'deckName card) "LeetCode Random")
+                      card)
+                     ("guiShowAnswer" t)
+                     ("guiAnswerCard" (push (alist-get 'ease params) answers) t)
+                     ("leetcodeFinishRandomCard" t)
+                     (_ (ert-fail (format "Unexpected action: %s" action)))))))
+        (should (leetcode-anki-rate 3))
+        (should (= resumes 1))
+        (should (equal answers '(3)))
+        (should (eq (leetcode-anki--session-state session) 'rated))))))
+
+(ert-deftest leetcode-anki-rating-never-restores-an-already-rated-card ()
+  (leetcode-anki-test--with-review
+    (let ((original card))
+      (setq card (leetcode-anki-test--card 999))
+      (cl-letf (((symbol-function 'leetcode-anki--request)
+                 (lambda (action &optional _)
+                   (pcase action
+                     ("guiReviewActive" t)
+                     ("guiCurrentCard" card)
+                     ("cardsInfo" (list (append original '((type . 2) (queue . 2) (reps . 1)))))
+                     (_ (ert-fail "Already-rated card must not be restored or answered"))))))
+        (should-error (leetcode-anki-rate 3) :type 'user-error)
+        (should-not answers)))))
