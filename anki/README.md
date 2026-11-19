@@ -106,8 +106,8 @@ preset named **LeetCode NeetCode150** with:
 | New cards/day | 1 |
 | Maximum reviews/day | 3 |
 | Maximum interval | 100 days |
-| Learning steps | 1 minute, 10 minutes |
-| Relearning steps after Again | 1 minute |
+| Learning steps | 1 day (`1440` minutes) |
+| Relearning steps after Again | 1 day (`1440` minutes) |
 | Starting ease | 250% |
 | Review Hard multiplier | 1.2 |
 | Review Easy bonus | 1.3 |
@@ -143,7 +143,7 @@ Anki's add-on configuration dialog. The defaults in
 
 | Initial rating | Next review |
 | --- | --- |
-| Again | Native retry step, about 1 minute with our preset |
+| Again | 1 day, using the preset’s native learning/relearning step |
 | Hard | 3 days |
 | Good | 4 days |
 | Easy | 5 days |
@@ -157,7 +157,8 @@ Hard holds the current interval, bounded by 3 and 100 days. Good chooses
 one strictly greater step; Easy chooses two, stopping at the maximum.
 Existing off-ladder intervals advance to the next greater steps. Late
 reviews use the scheduled interval without a lateness bonus. Again uses
-native relearning; the next successful rating restarts at 3 days.
+native relearning with a one-day delay; the next successful rating restarts
+at 3 days.
 Existing due dates remain unchanged until a card is next rated.
 
 The add-on changes native passing answer states before displaying or

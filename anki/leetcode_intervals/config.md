@@ -8,7 +8,8 @@ ladder minimum/maximum), Good chooses the next strictly greater step,
 and Easy chooses the second greater step. Existing off-ladder intervals
 advance to the next greater steps. At the maximum, passing answers stay
 at the maximum. Late reviews use the card's scheduled interval, without
-a lateness bonus. Again uses native relearning; its next successful
+a lateness bonus. Again uses native learning/relearning steps: set both
+to `1440` minutes (1 day) in the LeetCode preset. Its next successful
 Hard/Good/Easy answer restarts at the first ladder step (3 days).
 
 Other decks and ordinary filtered decks retain native scheduling.
