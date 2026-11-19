@@ -97,6 +97,26 @@ class ModernIntervalTests(unittest.TestCase):
         self.col.undo()
         self.assertEqual(self.col.get_card(cid).ivl, 5)
 
+    def test_one_day_again_preset_for_new_and_review_cards(self):
+        config = self.col.decks.config_dict_for_deck_id(self.did)
+        config['new']['delays'] = [1440.0]
+        config['lapse']['delays'] = [1440.0]
+        self.col.decks.update_config(config)
+        for graduated in (False, True):
+            with self.subTest(graduated=graduated):
+                cid = self.add_card()
+                queued = self.col.sched.get_queued_cards().cards[0]
+                if graduated:
+                    self.answer(queued, CardAnswer.GOOD)
+                    self.col.sched.set_due_date([cid], '0')
+                    queued = self.col.sched.get_queued_cards().cards[0]
+                normal = queued.states.again.normal
+                learning = normal.relearning.learning if graduated else normal.learning
+                self.assertEqual(learning.scheduled_secs, 86400)
+                saved = self.answer(queued, CardAnswer.AGAIN)
+                self.assertEqual(saved.queue, 3)
+                self.assertEqual(saved.due, self.col.sched.today + 1)
+
     def test_other_decks_are_unchanged(self):
         self.did = self.col.decks.id("Vietnamese")
         self.col.decks.select(self.did)
